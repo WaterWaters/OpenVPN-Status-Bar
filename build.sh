@@ -109,7 +109,10 @@ echo "==> 生成分发包 $DIST_DIR ..."
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 cp -R "$APP_BUNDLE" "$DIST_DIR/"
-cp -f "$SCRIPT_DIR/dist-src/打开指引.html" "$DIST_DIR/"
+# 打开指引（dist-src/ 不入库；缺失则跳过，不影响分发）
+if [ -f "$SCRIPT_DIR/dist-src/打开指引.html" ]; then
+    cp -f "$SCRIPT_DIR/dist-src/打开指引.html" "$DIST_DIR/"
+fi
 
 # 使用说明（合并版：安装 + 使用 + 常见问题 + 安全提示）
 cat > "$DIST_DIR/使用说明.md" <<'MD'
@@ -186,7 +189,9 @@ mkdir -p "$DMG_STAGING/.background"
 # 内容：app + 文档 + Applications 快捷方式（拖拽安装用）
 cp -R "$APP_BUNDLE" "$DMG_STAGING/VPNStatusBar.app"
 cp -f "$DIST_DIR/使用说明.md" "$DMG_STAGING/"
-cp -f "$SCRIPT_DIR/dist-src/打开指引.html" "$DMG_STAGING/"
+if [ -f "$SCRIPT_DIR/dist-src/打开指引.html" ]; then
+    cp -f "$SCRIPT_DIR/dist-src/打开指引.html" "$DMG_STAGING/"
+fi
 ln -sf /Applications "$DMG_STAGING/Applications"
 
 # 生成背景图（AppKit 绘制，含标题/说明/两个放置框）

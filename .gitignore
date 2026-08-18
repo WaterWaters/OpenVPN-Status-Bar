@@ -12,8 +12,14 @@ dist/
 # 内置引擎二进制（build-openvpn.sh 产物，架构相关，不入库；用脚本重建）
 vendor/openvpn
 
-# 旧归档 / 内部工具
+# 设计稿（不入库）
+design/
 design.zip
+
+# 构建用材料（不入库；缺省时 build.sh 会跳过对应环节）
+dist-src/
+
+# 内部工具
 dsh-img.mjs
 vision.mjs
 
