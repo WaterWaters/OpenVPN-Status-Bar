@@ -1,6 +1,9 @@
 # VPNStatusBar
 
 [![Build](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml/badge.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml)
+[![macOS](https://img.shields.io/badge/macOS-13.0+-blue)](https://github.com/WaterWaters/OpenVPN-Status-Bar)
+[![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 一个 macOS 菜单栏 VPN 小工具：点一下菜单栏图标就能连接 / 断开公司 VPN，断线自动重连，全程无需命令行。
 
@@ -95,6 +98,10 @@ cd VPNStatusBar
 
 - 修改源码后需重新 `./build.sh` 才生效（覆盖并重新签名）。
 - CI：`.github/workflows/build.yml` 在 macOS 上编译校验并产出二进制。
+
+## 参与贡献
+
+欢迎提 Issue、PR。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)；安全问题见 [SECURITY.md](SECURITY.md)。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 

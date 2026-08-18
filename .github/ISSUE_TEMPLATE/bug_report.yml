@@ -1,0 +1,44 @@
+name: Bug 报告
+description: 提交一个缺陷
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象描述
+      description: 发生了什么？预期是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 尽量按步骤列出
+      placeholder: |
+        1. 打开 app
+        2. 点「连接 VPN」
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: 系统版本
+      description: 例如 macOS 14.5 (Apple 芯片 / Intel)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: app 版本
+      description: 例如 3.0.0
+  - type: textarea
+    id: log
+    attributes:
+      label: 面板「日志」内容
+      description: app 面板 → 日志，把内容粘贴进来，方便排查
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其它信息
+      description: 截图、设置页授权状态等

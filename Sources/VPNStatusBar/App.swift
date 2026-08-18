@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import VPNStatusBarCore
 
 /// 应用退出时确保清理 VPN 进程
 final class AppDelegate: NSObject, NSApplicationDelegate {

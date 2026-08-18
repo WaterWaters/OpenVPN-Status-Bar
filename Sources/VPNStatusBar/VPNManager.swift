@@ -2,53 +2,7 @@ import Foundation
 import Combine
 import AppKit
 import SwiftUI
-
-/// VPN 连接状态
-enum VPNStatus: Equatable {
-    case unconfigured
-    case disconnected
-    case connecting
-    case connected
-    case reconnecting(attempt: Int)
-
-    var title: String {
-        switch self {
-        case .unconfigured: return "未配置"
-        case .disconnected: return "已断开"
-        case .connecting: return "连接中…"
-        case .connected: return "已连接"
-        case .reconnecting(let attempt): return "重连中（第 \(attempt) 次）"
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .connected: return "network.badge.shield.half.filled"
-        case .connecting, .reconnecting: return "network"
-        case .disconnected, .unconfigured: return "network.slash"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .connected: return .green
-        case .connecting, .reconnecting: return .orange
-        case .disconnected, .unconfigured: return .gray
-        }
-    }
-
-    var isConnected: Bool {
-        if case .connected = self { return true }
-        return false
-    }
-
-    /// 进行中的忙碌状态（连接中 / 重连中）
-    var isBusy: Bool {
-        if case .connecting = self { return true }
-        if case .reconnecting = self { return true }
-        return false
-    }
-}
+import VPNStatusBarCore
 
 /// VPN 管理器：负责配置读写、连接/断开、隧道状态监控、断线自动重连
 /// v2：不再依赖上一级文件夹的 *.ovpn / .user ——
@@ -58,25 +12,6 @@ enum VPNStatus: Equatable {
 ///   未就绪时给出明确原因与修复命令（适配同事机器 brew 前缀/软链差异）。
 final class VPNManager: ObservableObject {
     static let shared = VPNManager()
-
-    /// VPN 引擎授权状态（v3：内置 openvpn + 一次性免密授权）
-    enum EngineAuth: Equatable {
-        case checking
-        case authorized
-        case unauthorized
-        case broken
-        case authorizing
-
-        var summary: String {
-            switch self {
-            case .checking: return "VPN 引擎检测中…"
-            case .authorized: return "VPN 引擎已授权"
-            case .unauthorized: return "VPN 引擎未授权（需要授权 VPN）"
-            case .broken: return "VPN 引擎异常（需要修复）"
-            case .authorizing: return "VPN 引擎授权中…"
-            }
-        }
-    }
 
     // MARK: - 配置存储（v2：应用内导入，不依赖本地文件）
 

@@ -6,10 +6,29 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: 编译 Swift (release)
+  test:
+    name: 单元测试
     runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: Swift 版本
+        run: swift --version
+
+      - name: 运行单元测试
+        run: swift test --package-path . --scratch-path .build
+
+  build:
+    name: 编译 (release)
+    runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
       - name: 检出代码
         uses: actions/checkout@v4

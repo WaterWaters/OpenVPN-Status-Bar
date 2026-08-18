@@ -1,0 +1,8 @@
+# 文本文件统一 LF，避免跨平台换行噪音
+* text=auto eol=lf
+
+# 二进制保持原样
+*.png binary
+*.icns binary
+*.dmg binary
+*.a binary

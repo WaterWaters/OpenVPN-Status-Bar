@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import VPNStatusBarCore
 
 // MARK: - 主面板（对应 design/mockup.html 面板设计）
 // 结构：状态块 → 主操作按钮 → 自动重连开关 → 最近事件 → 可折叠日志 → 配置 → 退出
@@ -605,7 +606,7 @@ private struct SettingsAuthSection: View {
     @EnvironmentObject private var vpn: VPNManager
     let onAuthorize: () -> Void
 
-    private var auth: VPNManager.EngineAuth { vpn.engineAuth }
+    private var auth: EngineAuth { vpn.engineAuth }
 
     private var head: (bg: Color, icon: String, iconBg: Color, iconFg: Color, title: String, sub: String) {
         switch auth {
