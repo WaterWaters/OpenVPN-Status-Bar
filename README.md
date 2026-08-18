@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml/badge.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml)
 
-中唐 VPN 的 macOS 菜单栏小工具：点一下菜单栏图标就能连接 / 断开公司 VPN，断线自动重连，全程无需命令行。
+一个 macOS 菜单栏 VPN 小工具：点一下菜单栏图标就能连接 / 断开公司 VPN，断线自动重连，全程无需命令行。
 
 **内置 openvpn 引擎，开箱即用** —— 不需要安装 Homebrew，也无需手动配置任何权限。
 

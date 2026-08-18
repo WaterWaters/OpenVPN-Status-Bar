@@ -137,7 +137,7 @@ private struct StatusHeader: View {
         case .unconfigured:
             return "导入 VPN 配置后开始"
         case .connected:
-            var s = "中唐 VPN · \(vpn.profileName) · 隧道 10.8.0.0/16"
+            var s = "VPNStatusBar · \(vpn.profileName) · 隧道 10.8.0.0/16"
             if vpn.reconnectCount > 0 { s += " · 已重连 \(vpn.reconnectCount) 次" }
             return s
         case .reconnecting:
@@ -145,7 +145,7 @@ private struct StatusHeader: View {
         case .connecting:
             return "正在建立隧道…"
         case .disconnected:
-            return "中唐 VPN · \(vpn.profileName)"
+            return "VPNStatusBar · \(vpn.profileName)"
         }
     }
 

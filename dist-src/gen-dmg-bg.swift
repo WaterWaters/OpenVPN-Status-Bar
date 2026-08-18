@@ -19,7 +19,7 @@ let title = NSAttributedString(string: "VPNStatusBar", attributes: [
 let ts = title.size()
 title.draw(at: NSPoint(x: (W - ts.width)/2, y: H - 70))
 
-let sub = NSAttributedString(string: "中唐 VPN 状态栏工具 · 拖入 Applications 完成安装", attributes: [
+let sub = NSAttributedString(string: "VPNStatusBar · 拖入 Applications 完成安装", attributes: [
     .font: NSFont.systemFont(ofSize: 13),
     .foregroundColor: NSColor(calibratedRed: 0.36, green: 0.36, blue: 0.40, alpha: 1),
 ])
