@@ -1,0 +1,88 @@
+/* Hallmark · genre: modern-minimal · tone: technical
+ * VPNStatusBar 设计 token · 浅色 / 深色两套，语义一致
+ * anchor hue: 260 (cool neutral) · status hues: ok 155 / busy 75 / danger 25
+ * 落地 SwiftUI 时映射为 Color extension / 命名颜色
+ */
+:root {
+  /* 字体 */
+  --font-ui:   -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  /* 表面 / 文字（浅色） */
+  --color-page:    oklch(95.5% 0.006 260);
+  --color-paper:   oklch(98.5% 0.005 255);
+  --color-paper-2: oklch(95% 0.006 255);
+  --color-paper-3: oklch(93% 0.007 255);
+  --color-ink:     oklch(22% 0.012 260);
+  --color-ink-2:   oklch(45% 0.01 260);
+  --color-ink-3:   oklch(62% 0.008 260);
+  --color-rule:    oklch(89% 0.006 255);
+  --color-knob:    oklch(99.5% 0 0);
+
+  /* 语义状态色（浅色） */
+  --color-ok:          oklch(60% 0.14 155);
+  --color-ok-ink:      oklch(42% 0.11 155);
+  --color-ok-soft:     oklch(95.5% 0.02 155);
+  --color-ok-soft-2:   oklch(93.5% 0.025 155);
+  --color-ok-rule:     oklch(85% 0.04 155);
+  --color-busy:        oklch(72% 0.15 75);
+  --color-busy-ink:    oklch(48% 0.12 75);
+  --color-busy-soft:   oklch(96% 0.02 75);
+  --color-danger:      oklch(58% 0.17 25);
+  --color-danger-ink:  oklch(40% 0.13 25);
+  --color-danger-soft: oklch(95.5% 0.02 25);
+  --color-danger-soft-2: oklch(93.5% 0.025 25);
+  --color-danger-rule: oklch(85% 0.05 25);
+  --color-focus:       oklch(55% 0.16 250);
+  --color-switch:      oklch(62% 0.16 245);
+
+  /* 间距（4 pt 基准） */
+  --space-2xs: 0.25rem; /* 4px */
+  --space-xs:  0.5rem;  /* 8px */
+  --space-sm:  0.75rem; /* 12px */
+  --space-md:  1rem;    /* 16px */
+  --space-lg:  1.5rem;  /* 24px */
+  --space-xl:  2.5rem;  /* 40px */
+
+  /* 动效 */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:     cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long:  420ms;
+
+  /* 圆角 / 阴影 */
+  --radius-panel: 12px;
+  --radius-btn: 7px;
+  --radius-inset: 6px;
+  --shadow-panel: 0 12px 32px oklch(18% 0.02 260 / 0.16);
+}
+
+:root[data-theme="dark"] {
+  --color-page:    oklch(15% 0.008 260);
+  --color-paper:   oklch(22% 0.008 260);
+  --color-paper-2: oklch(26% 0.01 260);
+  --color-paper-3: oklch(17.5% 0.008 260);
+  --color-ink:     oklch(93% 0.008 260);
+  --color-ink-2:   oklch(70% 0.01 260);
+  --color-ink-3:   oklch(58% 0.008 260);
+  --color-rule:    oklch(32% 0.008 260);
+
+  --color-ok:          oklch(74% 0.15 155);
+  --color-ok-ink:      oklch(85% 0.11 155);
+  --color-ok-soft:     oklch(26% 0.045 155);
+  --color-ok-soft-2:   oklch(30% 0.05 155);
+  --color-ok-rule:     oklch(35% 0.05 155);
+  --color-busy:        oklch(80% 0.14 75);
+  --color-busy-ink:    oklch(88% 0.10 75);
+  --color-busy-soft:   oklch(28% 0.04 75);
+  --color-danger:      oklch(72% 0.16 25);
+  --color-danger-ink:  oklch(84% 0.12 25);
+  --color-danger-soft: oklch(27% 0.045 25);
+  --color-danger-soft-2: oklch(31% 0.05 25);
+  --color-danger-rule: oklch(36% 0.05 25);
+  --color-focus:       oklch(75% 0.14 245);
+  --color-switch:      oklch(68% 0.14 245);
+  --shadow-panel: 0 12px 32px oklch(8% 0.02 260 / 0.55);
+}

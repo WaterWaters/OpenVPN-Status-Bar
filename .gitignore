@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# SwiftPM 构建
+.build/
+
+# 打包产物（app 包 / 分发包 / DMG）
+VPNStatusBar.app/
+dist/
+*.dmg
+
+# 内置引擎二进制（build-openvpn.sh 产物，架构相关，不入库；用脚本重建）
+vendor/openvpn
+
+# 旧归档 / 内部工具
+design.zip
+dsh-img.mjs
+vision.mjs
+
+# 临时
+*.log

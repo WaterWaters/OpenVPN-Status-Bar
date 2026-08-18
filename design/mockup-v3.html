@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPNStatusBar · v3 内置 openvpn 设计稿</title>
+<style>
+/* Hallmark · genre: modern-minimal · macrostructure: Status-First Utility Panel · tone: technical · theme: adaptive system (light/dark) · anchor hue: 260 · status hues: ok 155 / busy 75 / danger 25 · interactive prototype */
+
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  --color-page:   oklch(95.5% 0.006 260);
+  --color-paper:  oklch(98.5% 0.005 255);
+  --color-paper-2: oklch(95% 0.006 255);
+  --color-paper-3: oklch(93% 0.007 255);
+  --color-ink:    oklch(22% 0.012 260);
+  --color-ink-2:  oklch(45% 0.01 260);
+  --color-ink-3:  oklch(62% 0.008 260);
+  --color-rule:   oklch(89% 0.006 255);
+  --color-knob:   oklch(99.5% 0 0);
+
+  --color-ok:        oklch(60% 0.14 155);
+  --color-ok-ink:    oklch(42% 0.11 155);
+  --color-ok-soft:   oklch(95.5% 0.02 155);
+  --color-ok-soft-2: oklch(93.5% 0.025 155);
+  --color-ok-rule:   oklch(85% 0.04 155);
+
+  --color-busy:      oklch(72% 0.15 75);
+  --color-busy-ink:  oklch(48% 0.12 75);
+  --color-busy-soft: oklch(96% 0.02 75);
+
+  --color-danger:        oklch(58% 0.17 25);
+  --color-danger-ink:    oklch(40% 0.13 25);
+  --color-danger-soft:   oklch(95.5% 0.02 25);
+  --color-danger-soft-2: oklch(93.5% 0.025 25);
+  --color-danger-rule:   oklch(85% 0.05 25);
+
+  --color-focus:  oklch(55% 0.16 250);
+  --color-switch: oklch(62% 0.16 245);
+
+  --space-2xs: 0.25rem; --space-xs: 0.5rem; --space-sm: 0.75rem;
+  --space-md: 1rem; --space-lg: 1.5rem; --space-xl: 2.5rem;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms;
+
+  --radius-panel: 12px; --radius-btn: 7px; --radius-inset: 6px;
+  --shadow-panel: 0 12px 32px oklch(18% 0.02 260 / 0.16);
+}
+
+:root[data-theme="dark"] {
+  --color-page:   oklch(15% 0.008 260);
+  --color-paper:  oklch(22% 0.008 260);
+  --color-paper-2: oklch(26% 0.01 260);
+  --color-paper-3: oklch(17.5% 0.008 260);
+  --color-ink:    oklch(93% 0.008 260);
+  --color-ink-2:  oklch(70% 0.01 260);
+  --color-ink-3:  oklch(58% 0.008 260);
+  --color-rule:   oklch(32% 0.008 260);
+
+  --color-ok:        oklch(74% 0.15 155);
+  --color-ok-ink:    oklch(85% 0.11 155);
+  --color-ok-soft:   oklch(26% 0.045 155);
+  --color-ok-soft-2: oklch(30% 0.05 155);
+  --color-ok-rule:   oklch(35% 0.05 155);
+
+  --color-busy:      oklch(80% 0.14 75);
+  --color-busy-ink:  oklch(88% 0.10 75);
+  --color-busy-soft: oklch(28% 0.04 75);
+
+  --color-danger:        oklch(72% 0.16 25);
+  --color-danger-ink:    oklch(84% 0.12 25);
+  --color-danger-soft:   oklch(27% 0.045 25);
+  --color-danger-soft-2: oklch(31% 0.05 25);
+  --color-danger-rule:   oklch(36% 0.05 25);
+
+  --color-focus:  oklch(75% 0.14 245);
+  --color-switch: oklch(68% 0.14 245);
+  --shadow-panel: 0 12px 32px oklch(8% 0.02 260 / 0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-page:   oklch(15% 0.008 260);
+    --color-paper:  oklch(22% 0.008 260);
+    --color-paper-2: oklch(26% 0.01 260);
+    --color-paper-3: oklch(17.5% 0.008 260);
+    --color-ink:    oklch(93% 0.008 260);
+    --color-ink-2:  oklch(70% 0.01 260);
+    --color-ink-3:  oklch(58% 0.008 260);
+    --color-rule:   oklch(32% 0.008 260);
+    --color-ok:        oklch(74% 0.15 155);
+    --color-ok-ink:    oklch(85% 0.11 155);
+    --color-ok-soft:   oklch(26% 0.045 155);
+    --color-ok-soft-2: oklch(30% 0.05 155);
+    --color-ok-rule:   oklch(35% 0.05 155);
+    --color-busy:      oklch(80% 0.14 75);
+    --color-busy-ink:  oklch(88% 0.10 75);
+    --color-busy-soft: oklch(28% 0.04 75);
+    --color-danger:        oklch(72% 0.16 25);
+    --color-danger-ink:    oklch(84% 0.12 25);
+    --color-danger-soft:   oklch(27% 0.045 25);
+    --color-danger-soft-2: oklch(31% 0.05 25);
+    --color-danger-rule:   oklch(36% 0.05 25);
+    --color-focus:  oklch(75% 0.14 245);
+    --color-switch: oklch(68% 0.14 245);
+    --shadow-panel: 0 12px 32px oklch(8% 0.02 260 / 0.55);
+  }
+}
+
+html, body { overflow-x: clip; }
+body {
+  margin: 0; background: var(--color-page); color: var(--color-ink);
+  font: 15px/1.65 var(--font-ui); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+svg { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.page { max-width: 1000px; margin: 0 auto; padding: var(--space-xl) var(--space-md) var(--space-xl); }
+.mast { margin-bottom: var(--space-xl); }
+.mast h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.mast__sub { margin: var(--space-xs) 0 0; color: var(--color-ink-2); font-size: 14px; }
+.mast__tag { display: inline-block; margin-top: var(--space-sm); padding: 3px 10px; border: 1px solid var(--color-rule); border-radius: 999px; font: 12px var(--font-mono); color: var(--color-ink-2); }
+.sec { margin-top: var(--space-xl); }
+.sec__title { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.25; }
+.sec__lede { margin: var(--space-xs) 0 0; color: var(--color-ink-2); font-size: 14px; max-width: 68ch; }
+.howto { margin: var(--space-md) 0 0; padding: var(--space-sm) var(--space-md); border: 1px solid var(--color-rule); border-radius: var(--radius-btn); background: var(--color-paper); font-size: 13.5px; color: var(--color-ink-2); }
+.howto b { color: var(--color-ink); font-weight: 600; }
+.howto ol { margin: 0; padding-left: 1.2em; } .howto li { margin: 3px 0; }
+
+.icons { display: flex; flex-wrap: wrap; gap: var(--space-lg); margin-top: var(--space-md); }
+.iconfig { margin: 0; }
+.iconfig__tile { width: 32px; height: 28px; border-radius: var(--radius-btn); display: grid; place-items: center; border: 1px solid var(--color-rule); background: var(--color-paper); }
+.iconfig__tile svg { width: 16px; height: 16px; }
+.iconfig__tile--ok { color: var(--color-ok); } .iconfig__tile--busy { color: var(--color-busy); } .iconfig__tile--neutral { color: var(--color-ink-3); }
+.iconfig figcaption { margin-top: var(--space-xs); font-size: 12px; color: var(--color-ink-2); }
+
+.proto { margin-top: var(--space-lg); display: grid; grid-template-columns: 300px 1fr; gap: var(--space-xl); align-items: start; }
+.proto__left { min-width: 0; }
+.proto__right { min-width: 0; display: flex; flex-direction: column; gap: var(--space-md); }
+
+.baricon { display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm); padding: 6px 10px; width: fit-content; border: 1px dashed var(--color-rule); border-radius: var(--radius-btn); font-size: 11px; color: var(--color-ink-3); }
+.baricon__tile { width: 22px; height: 18px; display: grid; place-items: center; color: var(--color-ink-3); }
+.baricon__tile svg { width: 14px; height: 14px; }
+.baricon__tile--ok { color: var(--color-ok); } .baricon__tile--busy { color: var(--color-busy); }
+.baricon__tile--pulse svg, .iconfig__tile--pulse svg, .status__dot--pulse, .spinner { animation: softpulse 1.6s var(--ease-in-out) infinite; }
+@keyframes softpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.panel { width: min(300px,100%); background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: var(--radius-panel); box-shadow: var(--shadow-panel); padding: var(--space-sm); display: flex; flex-direction: column; gap: var(--space-xs); font: 13px/1.4 var(--font-ui); color: var(--color-ink); }
+
+.status { display: grid; grid-template-columns: 28px 1fr; grid-template-rows: auto auto; column-gap: var(--space-xs); align-items: center; }
+.status__tile { grid-row: 1/3; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; }
+.status__tile--ok { background: var(--color-ok-soft); color: var(--color-ok-ink); }
+.status__tile--busy { background: var(--color-busy-soft); color: var(--color-busy-ink); }
+.status__tile--neutral { background: var(--color-paper-2); color: var(--color-ink-3); }
+.status__tile svg { width: 16px; height: 16px; }
+.status__title { grid-column: 2; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.status__title__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.status__dot--ok { background: var(--color-ok); } .status__dot--busy { background: var(--color-busy); } .status__dot--neutral { background: var(--color-ink-3); }
+.status__duration { margin-left: auto; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-ink-2); }
+.status__duration--idle { color: var(--color-ink-3); }
+.status__meta { grid-column: 2; font-size: 11px; color: var(--color-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.btn { display: flex; align-items: center; justify-content: center; gap: 6px; height: 30px; width: 100%; border-radius: var(--radius-btn); border: 1px solid transparent; cursor: pointer; font: 13px/1 var(--font-ui); font-weight: 500; color: var(--color-ink); transition: background-color var(--dur-short) var(--ease-out), border-color var(--dur-short) var(--ease-out), transform var(--dur-micro) var(--ease-out); }
+.btn svg { width: 13px; height: 13px; }
+.btn--ok { background: var(--color-ok-soft); border-color: var(--color-ok-rule); color: var(--color-ok-ink); } .btn--ok:hover { background: var(--color-ok-soft-2); }
+.btn--danger { background: var(--color-danger-soft); border-color: var(--color-danger-rule); color: var(--color-danger-ink); } .btn--danger:hover { background: var(--color-danger-soft-2); }
+.btn--neutral { background: var(--color-paper-2); border-color: var(--color-rule); color: var(--color-ink-2); } .btn--neutral:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.btn:active { transform: translateY(1px); } .btn:disabled { opacity: 0.6; cursor: default; }
+.spinner { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--color-ink-3); border-top-color: var(--color-ink-2); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.rule { height: 1px; background: var(--color-rule); margin: 2px 0; }
+.row { display: flex; align-items: center; gap: var(--space-xs); min-height: 26px; font-size: 13px; }
+.row__icon { display: grid; place-items: center; color: var(--color-ink-2); } .row__icon svg { width: 14px; height: 14px; }
+.switch { position: relative; width: 30px; height: 18px; border-radius: 9px; border: none; background: var(--color-ink-3); cursor: pointer; margin-left: auto; padding: 0; transition: background-color 180ms var(--ease-out); }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--color-knob); box-shadow: 0 1px 2px oklch(20% 0.02 260/0.3); transition: transform 180ms var(--ease-out); }
+.switch[aria-checked="true"] { background: var(--color-switch); } .switch[aria-checked="true"]::after { transform: translateX(12px); }
+
+.event { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--color-ink-2); margin-top: 2px; }
+.event svg { width: 12px; height: 12px; flex: none; color: var(--color-ink-3); }
+.event__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 未授权警示行 */
+.warn { display: flex; align-items: center; gap: 6px; padding: 0 6px; min-height: 24px; border-radius: var(--radius-inset); background: var(--color-danger-soft); border: 1px solid var(--color-danger-rule); font-size: 11px; color: var(--color-danger-ink); cursor: pointer; }
+.warn svg { width: 12px; height: 12px; flex: none; }
+.warn__text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn__go { font: 11px var(--font-ui); font-weight: 600; }
+.warn:hover { background: var(--color-danger-soft-2); }
+
+/* 折叠日志 */
+.disclosure { display: flex; align-items: center; gap: 6px; width: 100%; height: 24px; padding: 0 4px; border: none; border-radius: var(--radius-inset); background: transparent; color: var(--color-ink-2); font: 12px var(--font-ui); cursor: pointer; transition: background-color var(--dur-short) var(--ease-out); }
+.disclosure:hover { background: var(--color-paper-2); color: var(--color-ink); }
+.disclosure svg { width: 12px; height: 12px; }
+.disclosure__chev { margin-left: auto; width: 10px; height: 10px; transition: transform 180ms var(--ease-in-out); }
+.disclosure[aria-expanded="true"] .disclosure__chev { transform: rotate(90deg); }
+.logwrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 300ms var(--ease-in-out); }
+.logwrap.is-open { grid-template-rows: 1fr; } .logwrap > div { overflow: hidden; min-height: 0; }
+.log { margin: 0; padding: 7px 9px; font: 10px/1.65 var(--font-mono); color: var(--color-ink-2); background: var(--color-paper-3); border: 1px solid var(--color-rule); border-radius: var(--radius-inset); white-space: pre-wrap; }
+
+.footer { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 6px; border: none; border-radius: var(--radius-inset); background: transparent; color: var(--color-ink-2); font: 12px var(--font-ui); cursor: pointer; transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out); }
+.footer:hover { background: var(--color-paper-2); color: var(--color-ink); } .footer svg { width: 12px; height: 12px; }
+
+/* ---------- 设置页 ---------- */
+.setup-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-ink-2); }
+.setup-back { display: inline-grid; place-items: center; padding: 0; width: 20px; height: 20px; border: none; border-radius: 5px; background: transparent; color: var(--color-ink-2); cursor: pointer; font-size: 11px; -webkit-appearance: none; appearance: none; }
+.setup-back svg { width: 10px; height: 10px; } .setup-back:hover { background: var(--color-paper-2); color: var(--color-ink); }
+
+.sec-label { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; font-size: 11px; font-weight: 600; color: var(--color-ink-2); letter-spacing: 0.01em; }
+.sec-label svg { width: 11px; height: 11px; }
+.card { border: 1px solid var(--color-rule); border-radius: var(--radius-inset); background: var(--color-paper-2); overflow: hidden; }
+.card__head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.card__head--ok { background: var(--color-ok-soft); } .card__head--busy { background: var(--color-busy-soft); } .card__head--danger { background: var(--color-danger-soft); } .card__head--neutral { background: var(--color-paper-2); }
+.engicon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none; }
+.engicon svg { width: 14px; height: 14px; }
+.engicon--ok { background: var(--color-ok-soft-2); color: var(--color-ok-ink); }
+.engicon--busy { background: var(--color-busy-soft); color: var(--color-busy-ink); }
+.engicon--danger { background: var(--color-danger-soft-2); color: var(--color-danger-ink); }
+.engicon--neutral { background: var(--color-paper-3); color: var(--color-ink-3); }
+.card__title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.card__sub { font-size: 10.5px; color: var(--color-ink-3); margin-top: 1px; }
+.kv { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--color-rule); font-size: 11px; color: var(--color-ink-2); }
+.kv b { font-weight: 500; color: var(--color-ink-3); width: 52px; flex: none; font-weight: 600; }
+.kv span.mono { font: 10.5px var(--font-mono); } kbd { font: 10px var(--font-mono); background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: 4px; padding: 0 4px; }
+.card__body { padding: 8px 10px; border-top: 1px solid var(--color-rule); font-size: 11px; color: var(--color-ink-2); line-height: 1.6; }
+.card__actions { display: grid; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--color-rule); }
+.hint { font-size: 10px; color: var(--color-ink-3); line-height: 1.6; }
+.linkbtn { border: none; background: transparent; padding: 0; cursor: pointer; font: 11px var(--font-ui); color: var(--color-focus); }
+.linkbtn:hover { text-decoration: underline; }
+.dangerbtn { border: none; background: transparent; padding: 0; cursor: pointer; font: 11px var(--font-ui); color: var(--color-danger); }
+.dangerbtn:hover { text-decoration: underline; }
+
+/* 标注 / 演示工具 */
+.anno { position: absolute; display: none; }
+.proto { position: relative; }
+.ctl { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.dbtn { padding: 6px 13px; border-radius: var(--radius-btn); border: 1px solid var(--color-rule); background: var(--color-paper); color: var(--color-ink-2); font: 13px var(--font-ui); cursor: pointer; transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out), border-color var(--dur-short) var(--ease-out); }
+.dbtn:hover { border-color: var(--color-ink-3); color: var(--color-ink); }
+.dbtn[aria-pressed="true"] { background: var(--color-ink); border-color: var(--color-ink); color: var(--color-paper); }
+.dbtn:disabled { opacity: 0.45; cursor: default; }
+.dbtn:focus-visible, .btn:focus-visible, .switch:focus-visible, .disclosure:focus-visible, .footer:focus-visible, .warn:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+
+.panelbox { border: 1px solid var(--color-rule); border-radius: var(--radius-btn); background: var(--color-paper); padding: var(--space-sm) var(--space-md); }
+.panelbox h3 { margin: 0 0 var(--space-xs); font-size: 13px; font-weight: 650; }
+.trace { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; max-height: 220px; overflow-y: auto; }
+.trace li { font: 11px/1.5 var(--font-mono); color: var(--color-ink-2); border-left: 2px solid var(--color-rule); padding-left: 8px; }
+.trace li .t { color: var(--color-ink-3); margin-right: 6px; } .trace li .arrow { color: var(--color-ink-3); margin: 0 4px; } .trace li .to { color: var(--color-ink); }
+.struct { margin: 0; font-size: 12px; color: var(--color-ink-2); line-height: 1.9; }
+
+/* 授权状态快照 */
+.matrix { display: flex; flex-wrap: wrap; gap: var(--space-lg); margin-top: var(--space-lg); }
+.mcell { flex: 0 1 300px; }
+.mcell__name { margin: 0 0 var(--space-xs); font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.mcell__note { margin: var(--space-xs) 0 0; font-size: 12px; color: var(--color-ink-3); line-height: 1.6; max-width: 300px; }
+
+@media (max-width: 860px) { .proto { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-network" viewBox="0 0 16 16"><circle cx="5" cy="4.5" r="2"/><circle cx="12" cy="6.5" r="2"/><circle cx="7.5" cy="11.5" r="2"/><path d="M6.8 6.1 10.3 7.6M5.9 10 10.8 8.2"/></symbol>
+    <symbol id="i-network-slash" viewBox="0 0 16 16"><circle cx="5" cy="4.5" r="2"/><circle cx="12" cy="6.5" r="2"/><circle cx="7.5" cy="11.5" r="2"/><path d="M6.8 6.1 10.3 7.6M5.9 10 10.8 8.2"/><path d="m3 13 10-10"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 1.6 13.6 3.4v3.8c0 3.5-2.4 6-5.6 7-3.2-1-5.6-3.5-5.6-7V3.4Z"/><circle cx="6" cy="7" r="1.1"/><circle cx="10" cy="7" r="1.1"/><circle cx="8" cy="10" r="1.1"/><path d="M6.9 7.8 7.6 9M9.1 7.8 8.4 9"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.5 3.6v8.8L12.8 8Z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.6" y="4.6" width="6.8" height="6.8" rx="1.6" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-reload" viewBox="0 0 16 16"><path d="M13 8.2a5 5 0 1 1-1.5-3.6M13 8.2V4.9M13 8.2h-3.3"/></symbol>
+    <symbol id="i-back" viewBox="0 0 16 16"><path d="m9.8 4.6-3.6 3.4 3.6 3.4"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 16 16"><path d="m6.2 4.6 3.6 3.4-3.6 3.4"/></symbol>
+    <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.4M8 4.6v.2"/></symbol>
+    <symbol id="i-log" viewBox="0 0 16 16"><path d="M4.2 2.4h5.1l2.5 2.5v8.7h-7.6Z"/><path d="M9.2 2.4v2.6h2.6M6 9h4M6 11h3"/></symbol>
+    <symbol id="i-power" viewBox="0 0 16 16"><path d="M8 2.2v5.4M4.7 4.3a5.3 5.3 0 1 0 6.6 0"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v2M8 12.2v2M14.2 8h-2M3.8 8h-2M12.4 3.6l-1.4 1.4M5 11l-1.4 1.4M12.4 12.4 11 11M5 5 3.6 3.6"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2 14 14H2Z"/><path d="M8 6.4v3.2M8 11.6v.2"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="4.4" y="7" width="7.2" height="6" rx="1.4"/><path d="M5.8 7V5.2a2.2 2.2 0 0 1 4.4 0V7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m5.4 8.2 1.8 1.8 3.4-3.8"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2l2 1.3"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4.2 2.4h5.1l2.5 2.5v8.7h-7.6Z"/><path d="M9.2 2.4v2.6h2.6"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v2M8 12.2v2M14.2 8h-2M3.8 8h-2M12.4 3.6l-1.4 1.4M5 11l-1.4 1.4M12.4 12.4 11 11M5 5 3.6 3.6"/></symbol>
+  </defs>
+</svg>
+
+<main class="page">
+  <header class="mast">
+    <h1>VPNStatusBar · v3</h1>
+    <p class="mast__sub">内置 openvpn + 一次性授权 · 设置页集中管理授权与配置 · 交互原型</p>
+    <span class="mast__tag">交互原型 v3 · 面板可直接操作</span>
+  </header>
+
+  <section class="sec">
+    <h2 class="sec__title">交互原型</h2>
+    <p class="sec__lede">左侧 300pt 面板可操作。重点看：未授权时主面板警示行 → 点「设置…」→ 设置页授权卡 →
+      「授权 VPN…」→ 授权中 → 已授权（版本/路径/时间）；再回到主面板，警示行消失、可连接。</p>
+    <div class="howto">
+      <b>怎么玩：</b>
+      <ol>
+        <li>默认<b>未授权</b> → 主面板出现橙色警示行「VPN 引擎未授权」→ 点它或点「设置…」进入设置页</li>
+        <li>设置页「授权 VPN…」→ 显示授权中（加载）→ 自动变已授权（openvpn 2.7 · arm64 · 授权时间）</li>
+        <li>「模拟误关弹窗」→ 回到未授权（兜底按钮再次发起）</li>
+        <li>「模拟引擎损坏」→ 异常态 →「修复并重新授权…」恢复</li>
+        <li>右侧「授权状态」可手动切换；点上方菜单栏图标看主面板各 VPN 状态</li>
+      </ol>
+    </div>
+
+    <div class="proto">
+      <div class="proto__left">
+        <div class="baricon">
+          <span class="baricon__tile" id="bariconTile"><svg><use href="#i-network-slash"/></svg></span>
+          <span id="bariconLabel">已断开</span>
+        </div>
+        <div class="panel" id="interactive-panel" aria-live="polite"></div>
+      </div>
+
+      <div class="proto__right">
+        <div class="ctl" role="group" aria-label="演示工具">
+          <button class="dbtn" id="btnUnauth" aria-pressed="true">未授权</button>
+          <button class="dbtn" id="btnAuth" aria-pressed="false">已授权</button>
+          <button class="dbtn" id="btnBroken" aria-pressed="false">异常</button>
+          <button class="dbtn" id="btnAccClose">误关弹窗</button>
+          <button class="dbtn" id="btnRepair" disabled>引擎损坏(自动)</button>
+          <button class="dbtn" id="btnFull">播放完整流程</button>
+          <button class="dbtn" id="themeBtn" aria-pressed="false">深色</button>
+        </div>
+        <div class="panelbox">
+          <h3>状态轨迹（UX 时间线）</h3>
+          <ul class="trace" id="trace"></ul>
+        </div>
+        <div class="panelbox">
+          <h3>设置页结构</h3>
+          <p class="struct">
+            <b>A</b> 授权 · VPN 引擎：状态卡（已授权/未授权/授权中/异常）+ 版本/路径/时间 + 授权/修复按钮<br>
+            <b>B</b> 连接配置：配置文件/服务器/用户名 + 修改/导入 + 清除
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2 class="sec__title">授权状态快照</h2>
+    <p class="sec__lede">设置页授权卡在四种引擎授权状态下的静态编排。</p>
+    <div class="matrix" id="matrix"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var NL = String.fromCharCode(10);
+  var sim = {
+    view: 'panel',            // panel | settings
+    field: 'auth',            // 设置页高亮字段（演示用）
+    vpn: 'disconnected',      // unconfigured | disconnected | connecting | connected | reconnecting
+    auth: 'unauthorized',     // authorized | unauthorized | authorizing | broken
+    auto: true,
+    config: { name: 'dev-ai.ovpn', server: '36.213.156.243:1194', user: 'user01' },
+    event: '就绪',
+    connectionAt: 0,
+    reconnectCount: 0,
+    logOpen: true,
+    log: ['（暂无日志）']
+  };
+  var timers = [];
+
+  function schedule(fn, ms) { timers.push(setTimeout(fn, ms)); }
+  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+  function now() { var d = new Date(); function p(n){return (n<10?'0':'')+n;} return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
+  function fmtDur(sec){ var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=Math.floor(sec%60); function p(n){return (n<10?'0':'')+n;} return p(h)+':'+p(m)+':'+p(s); }
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function tracePush(msg){ var li=document.createElement('li'); li.innerHTML='<span class="t">'+now()+'</span>'+esc(msg); var box=document.getElementById('trace'); box.insertBefore(li,box.firstChild); while(box.children.length>12){box.removeChild(box.lastChild);} }
+  function pushLog(l){ l.forEach(function(x){ sim.log.push(x); }); if(sim.log.length>8){ sim.log=sim.log.slice(sim.log.length-8);} }
+  function setEvent(e){ sim.event=e; renderPanel(); }
+
+  function authTone() {
+    switch(sim.auth){
+      case 'authorized': return { tone:'ok', icon:'check', title:'已授权', sub:'openvpn 2.7.0 · arm64 · 授权于 2025-03-14' };
+      case 'authorizing': return { tone:'busy', icon:'clock', title:'授权中…', sub:'正在写入免密规则 / 安装引擎…' };
+      case 'broken': return { tone:'danger', icon:'warn', title:'引擎异常', sub:'引擎二进制缺失或被移动，需修复' };
+      default: return { tone:'neutral', icon:'lock', title:'未授权', sub:'需一次授权以建立 VPN 隧道' };
+    }
+  }
+
+  // ---------- 设置页 ----------
+  function settingsHtml(){
+    var a = authTone();
+    var head = '<div class="setup-head"><button class="setup-back" data-action="back" aria-label="返回"><svg><use href="#i-back"/></svg></button><span style="margin-left:2px">设置</span></div>';
+    // A 授权卡
+    var eng = '<div class="card" style="margin-top:8px">'
+      + '<div class="card__head card__head--' + a.tone + '">'
+      + '<div class="engicon engicon--' + a.tone + '"><svg><use href="#i-' + a.icon + '"/></svg></div>'
+      + '<div><div class="card__title">VPN 引擎 · ' + a.title + '</div><div class="card__sub">' + a.sub + '</div></div>'
+      + '</div>';
+    if (sim.auth === 'authorized') {
+      eng += '<div class="kv"><b>版本</b><span class="mono">OpenVPN 2.7.0 — OpenSSL 3.5.2</span></div>'
+        + '<div class="kv"><b>路径</b><span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/usr/local/vpnstatusbar/openvpn</span></div>'
+        + '<div class="kv"><b>架构</b>arm64（Intel 自动用 x86_64）</div>';
+    }
+    eng += '<div class="card__actions">';
+    if (sim.auth === 'unauthorized') {
+      eng += '<button class="btn btn--ok" data-action="authorize">授权 VPN…</button>';
+    } else if (sim.auth === 'authorizing') {
+      eng += '<button class="btn btn--neutral" disabled><span class="spinner"></span>授权中…</button>';
+    } else if (sim.auth === 'broken') {
+      eng += '<button class="btn btn--danger" data-action="authorize">修复并重新授权…</button>';
+    } else {
+      eng += '<button class="btn btn--neutral" data-action="authorize">重新授权…</button>';
+    }
+    eng += '</div>'
+      + '<div class="card__body"><span class="hint">授权用于以系统管理员身份建立 VPN 隧道，仅需一次。</span><br>'
+      + '<span class="hint">若授权弹窗被误关，点上方按钮再次发起即可，不会重复扣权限。</span></div>'
+      + '</div>';
+
+    // B 配置卡
+    var cfg = '<div class="sec-label" style="margin-top:10px"><svg><use href="#i-doc"/></svg>连接配置</div>'
+      + '<div class="card">';
+    if (sim.config) {
+      cfg += '<div class="kv"><b>配置</b>' + esc(sim.config.name) + '</div>'
+        + '<div class="kv"><b>服务器</b>' + esc(sim.config.server) + '</div>'
+        + '<div class="kv"><b>用户名</b>' + esc(sim.config.user) + '（密码存钥匙串）</div>'
+        + '<div class="card__actions">'
+        + '<button class="btn btn--neutral" data-action="edit-config">修改配置…</button>'
+        + '<button class="dangerbtn" data-action="clear-config" style="justify-self:start;margin-left:2px">清除配置…</button>'
+        + '</div>';
+    } else {
+      cfg += '<div class="card__body">尚未导入配置<br><span class="hint">导入 .ovpn 文件与凭据后可连接。</span></div>'
+        + '<div class="card__actions"><button class="btn btn--ok" data-action="import-config">导入配置…</button></div>';
+    }
+    cfg += '</div>';
+
+    return head + eng + cfg;
+  }
+
+  // ---------- 主面板 ----------
+  function panelHtml(){
+    var title, tile, dot, meta, dur = '--:--:--', pulse = false;
+    switch (sim.vpn) {
+      case 'unconfigured': title='未配置'; tile={i:'network-slash',t:'neutral'}; dot='neutral'; meta='导入 VPN 配置后开始'; break;
+      case 'connecting': title='连接中…'; tile={i:'network',t:'busy'}; dot='busy'; pulse=true; meta='正在建立隧道…'; break;
+      case 'connected':
+        title='已连接'; tile={i:'shield',t:'ok'}; dot='ok'; dur=fmtDur((Date.now()-sim.connectionAt)/1000);
+        meta='中唐 VPN · '+(sim.config?sim.config.name:'—') + (sim.reconnectCount>0?' · 已重连 '+sim.reconnectCount+' 次':'');
+        break;
+      case 'reconnecting': title='重连中 · 第 '+sim.reconnectCount+' 次'; tile={i:'network',t:'busy'}; dot='busy'; pulse=true; meta='x 秒后自动重试'; break;
+      default: title='已断开'; tile={i:'network-slash',t:'neutral'}; dot='neutral'; meta='中唐 VPN · '+(sim.config?sim.config.name:'—'); break;
+    }
+    var dotCls = 'status__dot status__dot--'+dot+(pulse?' status__dot--pulse':'');
+    var html = '<div class="status">'
+      + '<div class="status__tile status__tile--'+tile.t+'"><svg><use href="#i-'+tile.i+'"/></svg></div>'
+      + '<div class="status__title"><span class="'+dotCls+'"></span><span class="status__title__text">'+htmlE(title)+'</span>'
+      + '<span class="status__duration'+(dur==='--:--:--'?' status__duration--idle':'')+'">'+dur+'</span></div>'
+      + '<div class="status__meta">'+htmlE(meta)+'</div></div>';
+
+    // 主操作
+    var b;
+    if (sim.vpn==='unconfigured') b={label:'导入配置…',icon:'doc',tone:'neutral',disabled:false,spinner:false,act:'import'};
+    else if (sim.vpn==='disconnected') b={label:'连接 VPN',icon:'play',tone:'ok',disabled:false,spinner:false,act:'connect'};
+    else if (sim.vpn==='connected') b={label:'断开 VPN',icon:'stop',tone:'danger',disabled:false,spinner:false,act:'disconnect'};
+    else if (sim.vpn==='reconnecting') b={label:'立即重连',icon:'reload',tone:'neutral',disabled:false,spinner:false,act:'reconnect'};
+    else b={label:'连接中…',icon:null,tone:'neutral',disabled:true,spinner:true,act:null};
+    var btnIn = b.spinner?'<span class="spinner"></span><span>'+htmlE(b.label)+'</span>' : b.icon?'<svg><use href="#i-'+b.icon+'"/></svg><span>'+htmlE(b.label)+'</span>' : '<span>'+htmlE(b.label)+'</span>';
+    html += '<button class="btn btn--'+b.tone+'" data-action="'+b.act+'"'+(b.disabled?' disabled':'')+'>'+btnIn+'</button>';
+
+    // 未授权警示行
+    if (sim.auth==='unauthorized' || sim.auth==='broken') {
+      var wt = sim.auth==='broken' ? 'VPN 引擎异常，需修复' : 'VPN 引擎未授权，可能无法连接';
+      html += '<button class="warn" data-action="open-settings"><svg><use href="#i-warn"/></svg>'
+        + '<span class="warn__text">'+htmlE(wt)+'</span><span class="warn__go">设置 ›</span></button>';
+    }
+
+    html += '<div class="rule"></div>';
+    html += '<div class="row"><span class="row__icon"><svg><use href="#i-reload"/></svg></span><span>断线自动重连</span>'
+      + '<button class="switch" role="switch" aria-checked="'+sim.auto+'" aria-label="断线自动重连" data-action="auto"></button></div>';
+    html += '<div class="event"><svg><use href="#i-info"/></svg><span class="event__text">'+htmlE(sim.event)+'</span></div>';
+
+    // 日志
+    html += '<button class="disclosure" aria-expanded="'+sim.logOpen+'" data-action="log"><svg><use href="#i-log"/></svg>日志<svg class="disclosure__chev"><use href="#i-chev"/></svg></button>';
+    html += '<div class="logwrap'+(sim.logOpen?' is-open':'')+'"><div><pre class="log">'+htmlE(sim.log.join(NL)||'(暂无日志)')+'</pre></div></div>';
+
+    // 设置 / 退出
+    html += '<div class="rule"></div>';
+    html += '<button class="footer" data-action="open-settings"><svg><use href="#i-settings"/></svg>设置…</button>';
+    html += '<button class="footer" data-action="quit"><svg><use href="#i-power"/></svg>退出 VPNStatusBar</button>';
+    return html;
+  }
+
+  function htmlE(s){ return esc(s); }
+
+  function renderPanel(){
+    document.getElementById('interactive-panel').innerHTML =
+      sim.view==='settings' ? settingsHtml() : panelHtml();
+    // bar 图标
+    var bar = document.getElementById('bariconTile');
+    if (sim.view==='settings') { bar.className='baricon__tile'; bar.innerHTML='<svg><use href="#i-settings"/></svg>'; bar.style.color='var(--color-ink-3)'; }
+    else {
+      var t = sim.vpn==='connected'?{i:'shield',t:'ok'}: (sim.vpn==='connecting'||sim.vpn==='reconnecting')?{i:'network',t:'busy',p:true}:{i:'network-slash',t:'neutral'};
+      bar.className='baricon__tile baricon__tile--'+t.t+(t.p?' baricon__tile--pulse':'');
+      bar.innerHTML='<svg><use href="#i-'+t.i+'"/></svg>';
+    }
+    var lbls={
+      connected:'已连接', connecting:'连接中…', reconnecting:'重连中…', disconnected:'已断开', unconfigured:'未配置'
+    };
+    document.getElementById('bariconLabel').textContent = sim.view==='settings' ? '设置' : lbls[sim.vpn];
+  }
+
+  // ---------- 动作 ----------
+  function authorize(){
+    if (sim.auth==='authorizing') return;
+    var isRepair = sim.auth==='broken';
+    tracePush('授权：发起'+(isRepair?'修复':'授权')+'（弹一次管理员密码）');
+    sim.auth='authorizing'; sim.event=(isRepair?'正在修复引擎…':'正在授权引擎…'); renderPanel();
+    schedule(function(){
+      sim.auth='authorized'; sim.event='VPN 引擎已授权（免密运行 openvpn）';
+      tracePush('授权 → 已授权：免密规则已写入');
+      renderPanel();
+    }, 1400);
+  }
+  function simulateClose(){ if(sim.auth==='authorizing') return; tracePush('模拟：误关授权弹窗'); sim.auth='unauthorized'; sim.event='授权失败：弹窗已关闭，可去设置重试'; renderPanel(); }
+  function simulateBroken(){
+    if(sim.auth==='authorizing'||sim.auth==='broken') return;
+    tracePush('模拟：引擎二进制被移动 → 异常'); sim.auth='broken'; sim.event='引擎异常：二进制缺失，需修复'; renderPanel();
+  }
+
+  function connect(){
+    if (sim.auth!=='authorized') { sim.event=sim.auth==='broken'?'引擎异常，请先修复':'引擎未授权，请先授权'; renderPanel(); return; }
+    clearTimers(); pushLog(['开始连接（内置 openvpn）…']);
+    sim.vpn='connecting'; sim.event='发起连接…'; renderPanel();
+    schedule(function(){ pushLog(['TCP/UDP: Connecting to 36.213.156.243:1194']); renderPanel(); },700);
+    schedule(function(){ pushLog(['Initialization Sequence Completed']); sim.vpn='connected'; sim.connectionAt=Date.now(); sim.event='隧道已建立'; renderPanel(); },1700);
+  }
+  function disconnect(){
+    clearTimers(); pushLog(['SIGTERM received, exiting']);
+    sim.vpn='disconnected'; sim.event='已手动断开'; renderPanel();
+  }
+  function setAuthState(s){
+    clearTimers();
+    sim.auth=s;
+    if (s==='broken') sim.event='引擎异常：二进制缺失，需修复';
+    else if (s==='unauthorized') sim.event='VPN 引擎未授权';
+    else if (s==='authorized') sim.event='VPN 引擎已授权';
+    renderPanel();
+  }
+  function incButtonState(){
+    document.getElementById('btnUnauth').setAttribute('aria-pressed', sim.auth==='unauthorized'?'true':'false');
+    document.getElementById('btnAuth').setAttribute('aria-pressed', sim.auth==='authorized'?'true':'false');
+    document.getElementById('btnBroken').setAttribute('aria-pressed', sim.auth==='broken'?'true':'false');
+    document.getElementById('btnRepair').disabled = sim.auth!=='broken';
+  }
+
+  // ---------- 快照矩阵 ----------
+  var SNAP = {
+    authorized: { tone:'ok', icon:'check', title:'VPN 引擎 · 已授权', sub:'openvpn 2.7.0 · arm64 · 授权于 2025-03-14', btn:'重新授权…' },
+    unauthorized: { tone:'neutral', icon:'lock', title:'VPN 引擎 · 未授权', sub:'需一次授权以建立 VPN 隧道', btn:'授权 VPN…' },
+    authorizing: { tone:'busy', icon:'clock', title:'VPN 引擎 · 授权中…', sub:'正在写入免密规则 / 安装引擎…', btn:'授权中…' },
+    broken: { tone:'danger', icon:'warn', title:'VPN 引擎 · 异常', sub:'引擎二进制缺失或被移动，需修复', btn:'修复并重新授权…' }
+  };
+  function renderMatrix(){
+    var keys=['unauthorized','authorizing','authorized','broken'];
+    var notes={
+      unauthorized:'未授权：弹窗被取消/未授权 → 主按钮「授权 VPN…」，弹一次管理员密码写入免密规则',
+      authorizing:'授权中：弹窗处理/写规则中，按钮转加载态防重复点击',
+      authorized:'已授权：显示版本/路径/架构/授权时间；可「重新授权…」用于修复或重置',
+      broken:'异常：sudoers 授权正确但二进制被删/移动 → 「修复并重新授权…」重装并补授权'
+    };
+    var box=document.getElementById('matrix'); var html='';
+    keys.forEach(function(k){
+      var d=SNAP[k];
+      html += '<div class="mcell"><p class="mcell__name">'+esc(d.title.split('· ')[1])+'</p>'
+        + '<div class="panel">'
+        + '<div class="sec-label"><svg><use href="#i-settings"/></svg>授权 · VPN 引擎</div>'
+        + '<div class="card"><div class="card__head card__head--'+d.tone+'">'
+        + '<div class="engicon engicon--'+d.tone+'"><svg><use href="#i-'+d.icon+'"/></svg></div>'
+        + '<div><div class="card__title">'+esc(d.title)+'</div><div class="card__sub">'+esc(d.sub)+'</div></div></div>'
+        + (k==='authorized' ? '<div class="kv"><b>路径</b><span class="mono">/usr/local/vpnstatusbar/openvpn</span></div>' : '')
+        + '<div class="card__actions"><button class="btn btn--'+(d.tone==='ok'?'neutral':d.tone==='danger'?'danger':'ok')+'"'+(k==='authorizing'?' disabled':'')+'>'
+        + (k==='authorizing'?'<span class="spinner"></span>':'')+esc(d.btn)+'</button></div>'
+        + '</div></div><p class="mcell__note">'+notes[k]+'</p></div>';
+    });
+    box.innerHTML=html;
+  }
+
+  // ---------- 事件绑定 ----------
+  document.addEventListener('click', function(e){
+    var el=e.target;
+    var act = el.closest ? el.closest('[data-action]') : null;
+    var a = act ? act.getAttribute('data-action') : null;
+    if (a==='back') { sim.view='panel'; renderPanel(); return; }
+    if (a==='open-settings') { sim.view='settings'; renderPanel(); return; }
+    if (a==='authorize') { authorize(); return; }
+    if (a==='import' || a==='import-config' || a==='edit-config') { sim.event='（复用 v2 向导：'+(a==='import'||a==='import-config'?'导入':'修改')+'配置）'; renderPanel(); return; }
+    if (a==='clear-config') { sim.config=null; sim.vpn='unconfigured'; sim.event='配置已清除'; renderPanel(); return; }
+    if (a==='connect'){ connect(); return; }
+    if (a==='disconnect'){ disconnect(); return; }
+    if (a==='reconnect'){ clearTimers(); sim.vpn='connecting'; sim.event='立即重连…'; renderPanel(); schedule(function(){ sim.vpn='connected'; sim.connectionAt=Date.now(); sim.event='自动重连成功'; renderPanel(); },1600); return; }
+    if (a==='auto'){ sim.auto=!sim.auto; renderPanel(); return; }
+    if (a==='log'){ sim.logOpen=!sim.logOpen; renderPanel(); return; }
+    if (a==='quit'){ sim.event='已退出（示意）'; renderPanel(); return; }
+  });
+
+  document.getElementById('btnUnauth').addEventListener('click', function(){ setAuthState('unauthorized'); incButtonState(); });
+  document.getElementById('btnAuth').addEventListener('click', function(){ setAuthState('authorized'); incButtonState(); });
+  document.getElementById('btnBroken').addEventListener('click', function(){ setAuthState('broken'); incButtonState(); });
+  document.getElementById('btnAccClose').addEventListener('click', function(){ simulateClose(); incButtonState(); });
+  document.getElementById('btnRepair').addEventListener('click', function(){ authorize(); incButtonState(); });
+  document.getElementById('btnFull').addEventListener('click', function(){
+    var btn=this; btn.disabled=true; btn.textContent='演示中…';
+    setAuthState('unauthorized');
+    schedule(function(){ sim.view='settings'; sim.event='打开设置 → 授权卡'; renderPanel(); },500);
+    schedule(function(){ authorize(); incButtonState(); },900);
+    schedule(function(){ sim.view='panel'; renderPanel(); },2700);
+    schedule(function(){ sim.vpn='disconnected'; connect(); renderPanel(); },3100);
+    schedule(function(){ btn.disabled=false; btn.textContent='播放完整流程'; },5200);
+  });
+  document.getElementById('themeBtn').addEventListener('click', function(){
+    document.documentElement.setAttribute('data-theme',
+      document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');
+    this.setAttribute('aria-pressed', document.documentElement.getAttribute('data-theme')==='dark'?'true':'false');
+  });
+
+  renderMatrix();
+  renderPanel();
+  incButtonState();
+})();
+</script>
+</body>
+</html>
