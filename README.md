@@ -28,7 +28,7 @@
 
 ### 方式一：拖拽安装（推荐）
 
-1. 打开 `VPNStatusBar-2.0.dmg`
+1. 打开 `VPNStatusBar-0.0.1.dmg`
 2. 把 `VPNStatusBar.app` 拖进「应用程序（Applications）」文件夹
 3. 首次打开若提示“无法验证开发者”，见 [常见问题](#常见问题)
 

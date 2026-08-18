@@ -3,6 +3,8 @@
 set -euo pipefail
 
 APP_NAME="VPNStatusBar"
+# 版本号：三处保持一致（Info.plist / DMG 文件名）；发版时改这里并打同名 tag
+VERSION="${VERSION:-0.0.1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
@@ -76,9 +78,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key>
     <string>local.zhongtang.vpnstatusbar</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>0.0.1</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>0.0.1</string>
     <key>CFBundleExecutable</key>
     <string>VPNStatusBar</string>
     <key>CFBundleIconFile</key>
@@ -177,7 +179,7 @@ echo "✅ 分发包已生成: $DIST_DIR"
 echo ""
 echo "==> 生成 DMG 安装镜像 ..."
 DMG_STAGING="$SCRIPT_DIR/.dmg-staging"
-DMG_NAME="VPNStatusBar-2.0.dmg"
+DMG_NAME="VPNStatusBar-${VERSION}.dmg"
 # 注意：hdiutil create 对无 .dmg 后缀的输出路径会自动补后缀，这里直接带后缀 + 先删旧
 DMG_TEMPLATE="$SCRIPT_DIR/.dmg-template.dmg"
 # 清理上次残留挂载（同名卷），避免 create/attach 冲突
