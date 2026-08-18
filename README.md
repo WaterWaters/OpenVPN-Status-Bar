@@ -1,97 +1,101 @@
-# VPNStatusBar — 中唐 VPN 状态栏工具
+# VPNStatusBar
 
-macOS 菜单栏状态栏工具：一键连接/断开公司 VPN，**断线自动重连**（应对远端 30 分钟强制断开）。
-**v3 起内置 openvpn 引擎，不再依赖用户安装 Homebrew / 手动配 sudoers。**
+[![Build](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml/badge.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml)
 
-## 功能
+中唐 VPN 的 macOS 菜单栏小工具：点一下菜单栏图标就能连接 / 断开公司 VPN，断线自动重连，全程无需命令行。
 
-- 🔌 **菜单栏图标控制**：点击图标 → 连接/断开 VPN
-- 📶 **实时状态显示**：图标颜色区分（🟢 已连接 / 🟠 连接中·重连中 / ⚪ 已断开·未配置），面板内显示连接时长、重连次数、最近事件、openvpn 日志
-- 🧩 **内置引擎（v3）**：openvpn 静态编译打进 app（`Contents/Resources/openvpn`），**无需安装 brew**
-- 🔐 **一键授权（v3）**：设置页「授权 VPN…」弹一次系统管理员密码即写入免密规则，此后免密连接；授权状态（已授权/未授权/授权中/异常）与兜底按钮都在设置里
-- 📥 **应用内初始化**：首次启动「未配置」，导入 .ovpn + 用户名/密码即可；配置进私有目录、密码存钥匙串
-- 🔁 **断线自动重连**：远端断开后自动重连，指数退避（5s → 10s → 20s → 40s → 60s 封顶），可开关
-- 🧹 **残留清理**：app 异常退出后残留的 openvpn 会在下次连接时自动清理接管
-- ⌨️ **命令行控制**：`VPNStatusBar --connect` / `--disconnect`
+**内置 openvpn 引擎，开箱即用** —— 不需要安装 Homebrew，也无需手动配置任何权限。
+
+## ✨ 功能
+
+- 🔌 **一键连接 / 断开**：菜单栏图标点一下就连上，再点一下断开
+- 📶 **状态一目了然**：🟢 已连接（显示时长）· 🟠 连接中 / 重连中 · ⚪ 已断开 / 未配置
+- 🔁 **断线自动重连**：远端强制断开后自动恢复，不打断你干活
+- 🧩 **内置引擎**：openvpn 已打进 app，无需自己安装、版本一致，避开各种安装坑
+- 🔐 **授权一次，之后免密**：首次输一次系统密码授权，之后连接不再要密码
+- 📥 **配置自己管**：导入 `.ovpn` 文件 + 输入账号密码即可，密码安全存进系统钥匙串
+- 🧹 **自动清理**：异常退出后下次连接自动接管，不留残留进程
+
+## 系统要求
+
+- macOS 13.0+（Ventura 及以上）
+- Apple 芯片（M 系列）与 Intel 均可
 
 ## 安装
 
-### 1. 编译打包
+### 方式一：拖拽安装（推荐）
+
+1. 打开 `VPNStatusBar-2.0.dmg`
+2. 把 `VPNStatusBar.app` 拖进「应用程序（Applications）」文件夹
+3. 首次打开若提示“无法验证开发者”，见 [常见问题](#常见问题)
+
+### 方式二：从源码构建（开发者）
 
 ```bash
-cd ~/Documents/VPN/zhongTang/VPNStatusBar
-./build.sh
+cd VPNStatusBar
+./build-openvpn.sh   # 构建内置 openvpn 引擎（需联网 + 编译，约 1-2 分钟）
+./build.sh           # 编译并打包 .app / DMG
 ```
 
-产物：`VPNStatusBar/VPNStatusBar.app`（已内置自包含 openvpn 引擎，无需任何前置安装）
+## 首次使用（约 1 分钟）
 
-### 2. 启动
+1. **导入配置**：打开 app →「导入配置…」→ 选 `.ovpn` 文件 → 输入用户名和密码 → 保存
+2. **授权引擎**（只需一次）：面板底部「设置…」→「授权 VPN…」→ 输入一次系统开机密码 → 显示「已授权」
+3. **连接**：点「连接 VPN」，绿点 + 时长走表即连接成功
 
-```bash
-open ~/Documents/VPN/zhongTang/VPNStatusBar/VPNStatusBar.app
-```
-
-首次运行显示「未配置」→ 点「导入配置…」→ 选择 `.ovpn` 文件 → 输入用户名/密码 → 保存。
-
-**连接前需授权引擎一次**：面板底部 →「设置…」→「授权 VPN…」→ 输入一次系统开机密码 → 变为「已授权」→ 回主面板点「连接 VPN」。
-（若授权弹窗被误关，在设置页点「授权 VPN…」可随时再次发起。）
-
-### 3. 开机自启（可选）
-
-系统设置 → 通用 → 登录项 → 添加 `VPNStatusBar.app`。
+> 授权弹窗被误关？回「设置…」再点一次「授权 VPN…」即可，不影响使用。
 
 ## 使用
 
 | 操作 | 方式 |
 |---|---|
-| 连接 | 点击菜单栏图标 → 「连接 VPN」 |
-| 断开 | 点击菜单栏图标 → 「断开 VPN」 |
-| 授权引擎 / 修改配置 / 清除配置 | 面板底部 → 「设置…」 |
-| 开关自动重连 | 菜单内「断线自动重连」开关 |
+| 连接 | 菜单栏图标 →「连接 VPN」 |
+| 断开 | 菜单栏图标 →「断开 VPN」 |
+| 授权引擎 / 修改配置 / 清除配置 | 面板底部「设置…」 |
+| 开关自动重连 | 面板内「断线自动重连」开关 |
 | 退出 | 菜单内「退出 VPNStatusBar」（自动断开连接） |
 
-## 自动重连机制
+图标颜色：🟢 已连接 / 🟠 连接中·重连中 / ⚪ 已断开·未配置
 
-- **双层保障**：
-  1. openvpn 自身参数：`--connect-retry 5`、`--ping 15 --ping-restart 60`（死连接检测）
-  2. app watchdog：检测 openvpn 进程退出（远端 30min 强制断开 → 进程退出）→ 指数退避自动重启
-- 手动断开不触发重连；重连成功后退避重置为 5s
-- 状态检测：`netstat` 检查 `10.8/16 → utun` 路由
+## 安全与隐私
 
-## 技术要点
+- 密码只存**系统钥匙串（Keychain）**，不落明文文件；连接时临时生成认证文件，断开即删。
+- 内置自带的 openvpn 引擎，无需安装第三方软体。
+- “授权”仅用于以系统管理员身份建立 VPN 隧道，写完免密规则后日常使用不再需要密码。
 
-- **内置引擎 + 一次性授权（v3）**：openvpn 静态编译为自包含 ARM64 二进制打进 `Contents/Resources/openvpn`；首次授权时同步到稳定路径 `/usr/local/vpnstatusbar/openvpn` 并写入 `/etc/sudoers.d/vpnstatusbar` 免密规则（`<user> ALL=(root) NOPASSWD: <稳定路径>`）。因 sudoers 指向稳定路径而非 `.app` 内路径，**移动 / 升级 app 授权不失效**。
-- **授权状态机**：`已授权 / 未授权 / 授权中 / 异常`，由 `sudo -n -l` 检测判定；设置页展示状态与版本/路径/架构，提供「授权 / 重新授权 / 修复并重新授权」。
-- **root 处理**：openvpn 以 root 运行（创建 tun 需要），普通用户无法 kill → 通过 `--management 127.0.0.1 7505` 管理接口发送 `signal SIGTERM` 实现优雅断开，无需额外 sudo 权限。
-- **配置存储（v2）**：ovpn 复制到 `~/Library/Application Support/VPNStatusBar/`；密码存 Keychain；连接时由 app 生成 `.auth.tmp`（0600），断开/退出自动删除。
-- **日志**：`Application Support/VPNStatusBar/vpn.log`（启动前预创建并 chmod 644）。
-- **架构**：MenuBarExtra (SwiftUI) `.window` 弹窗样式；`VPNManager` 管理连接状态机 + 引擎授权 + 配置读写；`vpn-runner.sh` 参数化调用（`--openvpn/--ovpn/--auth/--log`），app 内置副本。
+## 常见问题
+
+| 问题 | 解决 |
+|---|---|
+| 提示“无法验证开发者”/“已损坏” | 右键点 app →「打开」；或终端执行 `xattr -dr com.apple.quarantine /Applications/VPNStatusBar.app` 后重开 |
+| 点连接提示“引擎未授权” | 「设置…」→「授权 VPN…」→ 输一次开机密码 |
+| 设置页显示“引擎异常” | 「设置…」→「修复并重新授权…」 |
+| 连接报错 sudo 需要密码 | 到「设置…」重新「授权 VPN…」，确保授权弹窗完成 |
+| 连接一会儿就断开 | 属正常：远端约 30 分钟强制断开一次，app 会自动重连 |
+| 点连接没反应 | 看面板「日志」，把内容发给管理员 |
+
+## 卸载
+
+1. 菜单栏图标 →「退出 VPNStatusBar」
+2. 把 `VPNStatusBar.app` 拖进废纸篓
+3. （可选）移除授权免密规则与配置：
+
+   ```bash
+   sudo rm /etc/sudoers.d/vpnstatusbar
+   rm -rf ~/Library/Application\ Support/VPNStatusBar
+   ```
 
 ## 开发
 
 ```bash
-# 构建内置引擎（静态自包含 openvpn，ARM64；首次需联网下载源码）
-./build-openvpn.sh
-
-# 编译（仅 Swift）
-swift build -c release --scratch-path .build
-
-# 编译 + 打包 .app + DMG
-./build.sh
+cd VPNStatusBar
+./build-openvpn.sh   # 构建内置 openvpn 引擎（静态自包含，ARM64）
+./build.sh           # 编译 + 打包 .app + DMG
 ```
 
-修改源码后**必须重新编译**才生效（`build.sh` 会覆盖 .app 并重新签名）。
+- 修改源码后需重新 `./build.sh` 才生效（覆盖并重新签名）。
+- CI：`.github/workflows/build.yml` 在 macOS 上编译校验并产出二进制。
 
-## 文件
+## License
 
-| 文件 | 说明 |
-|---|---|
-| `build-openvpn.sh` | 静态编译自包含 openvpn（OpenSSL/LZO/LZ4 全静态）→ `vendor/openvpn` |
-| `vendor/openvpn` | 内置引擎产物（build.sh 打进 `Contents/Resources/openvpn`） |
-| `Support/vpn-runner.sh` | openvpn 启动脚本（参数化：--openvpn/--ovpn/--auth/--log，app 内置副本） |
-| `Sources/VPNStatusBar/App.swift` | 入口（MenuBarExtra + 状态栏图标 + SIGTERM 清理） |
-| `Sources/VPNStatusBar/VPNManager.swift` | 核心：引擎授权状态机 + 配置读写 + 连接状态机 + 自动重连 + management 通信 |
-| `Sources/VPNStatusBar/ContentView.swift` | 面板 UI + 设置页 + 初始化向导（对应 design/mockup-v3.html） |
-| `Sources/VPNStatusBar/Keychain.swift` | 密码安全存储（钥匙串封装） |
-| `Sources/VPNStatusBar/DesignTokens.swift` | 设计 Token（浅色/深色自适应） |
-| `build.sh` | 编译打包脚本（打包引擎 + .app + 签名 + DMG） |
+[MIT](LICENSE) · Copyright (c) 2026 Water Wang
