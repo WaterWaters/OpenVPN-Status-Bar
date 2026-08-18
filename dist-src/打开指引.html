@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPNStatusBar · 一分钟安装指引</title>
+<style>
+  :root {
+    --paper: #FBFBFD; --paper2: #EFEFF3; --ink: #232329; --ink2: #5B5B64; --ink3: #8A8A93;
+    --rule: #E0E0E5; --ok: #2C9E6C; --okSoft: #D8F0E3; --okRule: #ADDBBF;
+    --focus: #3D6FE0; --danger: #D64A44;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #29292F; --paper2: #31313A; --ink: #EDEDF2; --ink2: #ADADB8; --ink3: #8B8B96;
+      --rule: #3E3E48; --ok: #4BCD96; --okSoft: #1F3A2D; --okRule: #2F5744;
+      --focus: #7FA8F0; --danger: #F07164;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 15px/1.7 -apple-system, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 24px 64px; }
+  h1 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 4px; }
+  .sub { color: var(--ink2); font-size: 14px; margin-bottom: 32px; }
+  .card {
+    background: var(--paper2); border: 1px solid var(--rule);
+    border-radius: 12px; padding: 20px 22px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .badge {
+    display: inline-grid; place-items: center; width: 24px; height: 24px;
+    border-radius: 50%; background: var(--ok); color: #fff; font-size: 13px; font-weight: 700; flex: none;
+  }
+  .badge.b2 { background: var(--focus); }
+  .badge.b3 { background: var(--ok); }
+  .badge.b4 { background: var(--danger); }
+  .steps { counter-reset: step; }
+  .step { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed var(--rule); }
+  .step:last-child { border-bottom: none; }
+  .step .num {
+    counter-increment: step; flex: none; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--okSoft); color: var(--ok); border: 1px solid var(--okRule);
+    display: grid; place-items: center; font-size: 12px; font-weight: 700; margin-top: 2px;
+  }
+  .step b { display: block; }
+  .step p { margin: 0; color: var(--ink2); font-size: 14px; }
+  .step p img, .step p svg { vertical-align: middle; }
+  code {
+    font: 12px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--paper); border: 1px solid var(--rule); border-radius: 6px;
+    padding: 2px 6px; color: var(--danger);
+  }
+  pre {
+    font: 12px/1.7 ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--paper); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-all;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--ink); }
+  .hint { font-size: 12.5px; color: var(--ink3); margin-top: 10px; }
+  .warn { border-left: 3px solid var(--danger); padding-left: 12px; }
+  .ok { border-left: 3px solid var(--ok); padding-left: 12px; }
+  .kbd {
+    display: inline-block; padding: 1px 7px; border: 1px solid var(--rule); border-radius: 5px;
+    background: var(--paper2); font-size: 12px; font-family: ui-monospace, Menlo, monospace;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink2); font-weight: 600; }
+  td { color: var(--ink2); }
+  td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .footer { margin-top: 32px; color: var(--ink3); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔌 VPNStatusBar · 一分钟安装指引</h1>
+  <p class="sub">内网分发版 · 全程约 1 分钟 · 不需要命令行基础(第 3 步除外，可贴命令)</p>
+
+  <div class="card steps">
+    <h2><span class="badge">1</span>拿到文件</h2>
+    <div class="step">
+      <span class="num">①</span>
+      <div>
+        <b>把 VPNStatusBar 发给同事</b>
+        <p>给同事 <code>VPNStatusBar-2.0.dmg</code>（或压缩包里的 <code>VPNStatusBar.app</code>）。
+        收到的文件会带“系统安全标记”，所以直接双击打开会被系统拦截 —— 这是正常现象，见下一步。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card steps">
+    <h2><span class="badge b2">2</span>解除系统拦截（二选一）</h2>
+    <div class="step">
+      <span class="num">①</span>
+      <div>
+        <b>图形方式（推荐，30 秒）</b>
+        <p>右键点 <code>VPNStatusBar.app</code> → 点菜单里的「打开」→ 弹出的提示框里再点一次「打开」。</p>
+        <p class="hint">👉 只有第一次需要这样，之后双击即可正常打开。</p>
+      </div>
+    </div>
+    <div class="step">
+      <span class="num">②</span>
+      <div>
+        <b>命令行方式（一条命令）</b>
+        <p>打开「终端」(Spotlight 搜 Terminal)，粘贴执行（<code>app路径</code> 换成实际位置）：</p>
+        <pre><code>xattr -dr com.apple.quarantine /path/to/VPNStatusBar.app</code></pre>
+        <p class="hint">然后双击打开即可。若路径带空格，用引号包住，例如：
+        <code>xattr -dr com.apple.quarantine "~/Downloads/VPNStatusBar.app"</code></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card steps">
+    <h2><span class="badge b3">3</span>导入配置并授权、连接</h2>
+    <div class="step">
+      <span class="num">①</span>
+      <div>
+        <b>双击启动 app</b>
+        <p>菜单栏出现图标。首次启动显示「未配置」。</p>
+      </div>
+    </div>
+    <div class="step">
+      <span class="num">②</span>
+      <div>
+        <b>导入配置文件</b>
+        <p>点「导入配置…」→ 选择 `.ovpn` 文件 → 输入用户名和密码 → 保存。</p>
+        <p class="hint">⚠️ 注意：这一步<u>不需要</u>手动放置任何文件，配置与密码由 app 管理（密码存进系统钥匙串）。</p>
+      </div>
+    </div>
+    <div class="step">
+      <span class="num">③</span>
+      <div>
+        <b>授权 VPN 引擎（一次即可）</b>
+        <p>面板底部「设置…」→「授权 VPN…」→ 输入一次系统开机密码 → 显示「已授权」。</p>
+        <p class="hint">openvpn 已内置进 app，无需安装任何东西。这一步把引擎装到系统并完成免密授权，之后连接不再要密码。</p>
+      </div>
+    </div>
+    <div class="step">
+      <span class="num">④</span>
+      <div>
+        <b>连接</b>
+        <p>点「连接 VPN」。绿点 + 时长走表 = 连接成功。断线会自动重连。</p>
+        <p class="hint">授权弹窗被误关？回「设置…」再点「授权 VPN…」即可。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="badge b4">4</span>常见问题</h2>
+    <table>
+      <tr><th>现象</th><th>解决</th></tr>
+      <tr><td>提示“无法验证开发者”</td><td>按第 2 步操作（右键打开，或 xattr 命令）</td></tr>
+      <tr><td>提示“已损坏，无法打开”</td><td>执行：<code>xattr -dr com.apple.quarantine /path/to/VPNStatusBar.app</code></td></tr>
+      <tr><td>点连接提示“引擎未授权”</td><td>按第 3 步 ③（「设置…」→「授权 VPN…」→ 输一次开机密码）</td></tr>
+      <tr><td>设置显示“引擎异常”</td><td>「设置…」→「修复并重新授权…」（重装引擎并补授权）</td></tr>
+      <tr><td>点连接没反应</td><td>看 app 面板「日志」，把内容发给管理员</td></tr>
+    </table>
+  </div>
+
+  <div class="footer">VPNStatusBar · 内网分发指引 · 有问题请联系管理员</div>
+</div>
+</body>
+</html>

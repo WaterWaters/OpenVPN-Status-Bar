@@ -16,9 +16,6 @@ vendor/openvpn
 design/
 design.zip
 
-# 构建用材料（不入库；缺省时 build.sh 会跳过对应环节）
-dist-src/
-
 # 内部工具
 dsh-img.mjs
 vision.mjs

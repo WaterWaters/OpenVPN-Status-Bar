@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: 编译 Swift (release)
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: Swift 版本
+        run: swift --version
+
+      - name: 编译 release
+        run: swift build -c release --package-path . --scratch-path .build
+
+      - name: 校验产物
+        run: |
+          BIN=".build/release/VPNStatusBar"
+          test -x "$BIN" || { echo "❌ 产物缺失: $BIN"; exit 1; }
+          echo "✅ 编译成功"
+          file "$BIN"
+
+      - name: 上传二进制产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: VPNStatusBar-bin
+          path: .build/release/VPNStatusBar
+          if-no-files-found: error
