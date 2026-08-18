@@ -103,6 +103,10 @@ cd VPNStatusBar
 
 欢迎提 Issue、PR。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)；安全问题见 [SECURITY.md](SECURITY.md)。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 致谢
+
+- **DeepSeek Harness** — 本项目的部分功能开发 / 重构 / 文档由该 AI 编码辅助环境协助完成。
+
 ## License
 
 [MIT](LICENSE) · Copyright (c) 2026 Water Wang

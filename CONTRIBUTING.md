@@ -48,6 +48,16 @@ cd VPNStatusBar
 - 提交信息用简体中文、动词开头（如 `feat:` `fix:` `ci:` `docs:`）。
 - 改动 UI 前可参考 `design/`（本地）设计稿。
 
+## 开发工具（可选）：DeepSeek Harness
+
+本项目在部分功能开发 / 重构 / 文档过程中使用了 **DeepSeek Harness**（一个 AI 编码辅助环境，提供可编排的自动编码代理）。它同样欢迎贡献者使用，示例场景：
+
+- 拆分子任务并行实现（如抽 Core 库、补单元测试、CI 编排）。
+- 自动审查 / 补测试 / 修复编译错误。
+- 生成或修订文档（README、CHANGELOG、模板）。
+
+如果使用 DeepSeek Harness，建议遵循「纯逻辑进 `Sources/VPNStatusBarCore/`、可测逻辑补单测」的约定，并让代理产出可本地 `swift build` / CI `swift test` 通过的提交，再人工 review。
+
 ## 问题反馈
 
 - Bug / 功能建议走 [Issue](https://github.com/WaterWaters/OpenVPN-Status-Bar/issues)，用模板填写，附上 app 面板「日志」内容更利于排查。
