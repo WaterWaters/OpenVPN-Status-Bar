@@ -112,3 +112,7 @@
 "notify.disconnected.body" = "%@ · 已断开连接";
 "notify.reconnectFailed.title" = "重连失败";
 "notify.reconnectFailed.body" = "%@ · 第 %d 次重连失败";
+"tab.overview" = "概览";
+"tab.profiles" = "配置";
+"tab.diagnostics" = "诊断";
+"tab.settings" = "设置";

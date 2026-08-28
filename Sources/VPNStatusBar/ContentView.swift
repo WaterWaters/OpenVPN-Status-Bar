@@ -7,22 +7,36 @@ import VPNStatusBarCore
 // 结构：状态块 → 主操作按钮 → 自动重连开关 → 最近事件 → 可折叠日志 → 配置 → 退出
 // 未配置时主操作 = 「导入配置…」→ 打开面板内向导；已配置时底部「配置…」→ 修改模式。
 
+enum PanelTab: String, CaseIterable, Identifiable {
+    case overview, profiles, diagnostics, settings
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .overview: return L10n.tr("tab.overview")
+        case .profiles: return L10n.tr("tab.profiles")
+        case .diagnostics: return L10n.tr("tab.diagnostics")
+        case .settings: return L10n.tr("tab.settings")
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var vpn: VPNManager
-    @State private var showSettings = false
+    @State private var selectedTab: PanelTab = .overview
+    @State private var showSettings = false // 保留兼容：EngineWarn 仍可跳设置 Tab
     @State private var showSetup = false
     @State private var setupMode: SetupMode = .import
 
     var body: some View {
         Group {
-            if showSettings {
-                SettingsView {
-                    showSettings = false
-                }
-            } else if showSetup {
+            if showSetup {
                 SetupWizard(mode: setupMode) {
                     showSetup = false
                 }
+            } else if showSettings {
+                // 兼容旧入口：直接切到 settings Tab
+                mainPanel
+                    .onAppear { selectedTab = .settings; showSettings = false }
             } else {
                 mainPanel
             }
@@ -35,38 +49,99 @@ struct ContentView: View {
                 Design.paper.opacity(0.92)
             }
         )
-        .animation(.easeInOut(duration: 0.2), value: showSettings || showSetup)
+        .animation(.easeInOut(duration: 0.2), value: showSetup)
+        .animation(.easeInOut(duration: 0.2), value: selectedTab)
     }
 
     private var mainPanel: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
+            Picker("", selection: $selectedTab) {
+                ForEach(PanelTab.allCases) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+
             StatusHeader()
 
-            PrimaryActionButton {
-                setupMode = .import
-                showSetup = true
-            }
-
-            EngineWarnRow {
-                showSettings = true
-            }
-
-            Hairline()
-
-            AutoReconnectRow()
-
-            EventRow()
-
-            DiagnosticsSection()
-
-            Hairline()
-
-            SettingsRow {
-                showSettings = true
+            switch selectedTab {
+            case .overview:
+                overviewTab
+            case .profiles:
+                profilesTab
+            case .diagnostics:
+                diagnosticsTab
+            case .settings:
+                settingsTab
             }
 
             FooterQuit()
         }
+    }
+
+    // MARK: - Tabs
+
+    private var overviewTab: some View {
+        VStack(spacing: 8) {
+            PrimaryActionButton {
+                setupMode = .import
+                showSetup = true
+            }
+            EngineWarnRow { selectedTab = .settings }
+            Hairline()
+            AutoReconnectRow()
+            EventRow()
+        }
+    }
+
+    private var profilesTab: some View {
+        VStack(spacing: 8) {
+            ProfilesInlineSection(onEdit: { setupMode = .edit; showSetup = true }, onImport: { setupMode = .import; showSetup = true })
+        }
+    }
+
+    private var diagnosticsTab: some View {
+        DiagnosticsSection()
+    }
+
+    private var settingsTab: some View {
+        VStack(spacing: 8) {
+            SettingsAuthSection(onAuthorize: { vpn.authorizeEngine() })
+            PreferencesSection()
+        }
+    }
+}
+
+// 轻量内联版：复用 SettingsConfigSection 的多配置列表，去标题与外框
+private struct ProfilesInlineSection: View {
+    @EnvironmentObject private var vpn: VPNManager
+    let onEdit: () -> Void
+    let onImport: () -> Void
+    var body: some View {
+        SettingsConfigSection(onEdit: onEdit, onImport: onImport, onClear: { vpn.clearConfig() })
+    }
+}
+
+private struct PreferencesSection: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Label(L10n.tr("launchAtLogin"), systemImage: "power").font(.system(size: 11)).foregroundStyle(Design.ink2)
+                Spacer()
+                Toggle("", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.setEnabled($0) }))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            HStack {
+                Label(L10n.tr("notifications"), systemImage: "bell").font(.system(size: 11)).foregroundStyle(Design.ink2)
+                Spacer()
+                Toggle("", isOn: Binding(get: { UserDefaults.standard.bool(forKey: "notifyEnabled") }, set: { UserDefaults.standard.set($0, forKey: "notifyEnabled"); if $0 { NotificationService.requestAuthorizationIfNeeded() } }))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Design.paper2))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Design.rule, lineWidth: 1))
     }
 }
 
@@ -864,24 +939,6 @@ private struct SettingsConfigSection: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Design.rule, lineWidth: 1)
             )
-            // 偏好：开机启动与通知（泛化通用）
-            VStack(spacing: 8) {
-                HStack {
-                    Label(L10n.tr("launchAtLogin"), systemImage: "power").font(.system(size: 11)).foregroundStyle(Design.ink2)
-                    Spacer()
-                    Toggle("", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.setEnabled($0) }))
-                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
-                }
-                HStack {
-                    Label(L10n.tr("notifications"), systemImage: "bell").font(.system(size: 11)).foregroundStyle(Design.ink2)
-                    Spacer()
-                    Toggle("", isOn: Binding(get: { UserDefaults.standard.bool(forKey: "notifyEnabled") }, set: { UserDefaults.standard.set($0, forKey: "notifyEnabled"); if $0 { NotificationService.requestAuthorizationIfNeeded() } }))
-                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
-                }
-            }
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Design.paper2))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Design.rule, lineWidth: 1))
         }
     }
 

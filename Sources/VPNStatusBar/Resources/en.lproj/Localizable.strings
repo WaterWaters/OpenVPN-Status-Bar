@@ -112,3 +112,7 @@
 "notify.disconnected.body" = "%@ · Disconnected";
 "notify.reconnectFailed.title" = "Reconnect Failed";
 "notify.reconnectFailed.body" = "%@ · Attempt %d failed";
+"tab.overview" = "Overview";
+"tab.profiles" = "Profiles";
+"tab.diagnostics" = "Diagnostics";
+"tab.settings" = "Settings";
