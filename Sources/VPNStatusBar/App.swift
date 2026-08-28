@@ -92,11 +92,15 @@ struct StatusBarIcon: View {
     }
 
     var body: some View {
+        // 统一加粗：menu bar 图标需与 WiFi/电池等系统图标线宽一致
+        let base = Image(systemName: status.symbolName)
+            .font(.system(size: 13, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(color)
         if status.isBusy {
             PulsingIcon(symbol: status.symbolName, color: color)
         } else {
-            Image(systemName: status.symbolName)
-                .foregroundStyle(color)
+            base
         }
     }
 }
@@ -108,8 +112,10 @@ private struct PulsingIcon: View {
 
     var body: some View {
         Image(systemName: symbol)
+            .font(.system(size: 13, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
             .foregroundStyle(color)
-            .opacity(pulse ? 0.35 : 1)
+            .opacity(pulse ? 0.45 : 1)
             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
             .onAppear { pulse = true }
             .transaction { $0.disablesAnimations = false }

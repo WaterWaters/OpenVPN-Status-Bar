@@ -137,7 +137,8 @@ private struct StatusHeader: View {
                     .fill(tile.bg)
                     .frame(width: 28, height: 28)
                 Image(systemName: vpn.status.symbolName)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(tile.fg)
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: vpn.status)

@@ -11,10 +11,10 @@ final class VPNStatusTests: XCTestCase {
     }
 
     func testSymbolName() {
-        XCTAssertEqual(VPNStatus.connected.symbolName, "network.badge.shield.half.filled")
-        XCTAssertEqual(VPNStatus.reconnecting(attempt: 1).symbolName, "network")
-        XCTAssertEqual(VPNStatus.disconnected.symbolName, "network.slash")
-        XCTAssertEqual(VPNStatus.unconfigured.symbolName, "network.slash")
+        XCTAssertEqual(VPNStatus.connected.symbolName, "shield.fill")
+        XCTAssertEqual(VPNStatus.reconnecting(attempt: 1).symbolName, "shield")
+        XCTAssertEqual(VPNStatus.disconnected.symbolName, "shield.slash.fill")
+        XCTAssertEqual(VPNStatus.unconfigured.symbolName, "shield.slash")
     }
 
     func testIsConnectedAndBusy() {

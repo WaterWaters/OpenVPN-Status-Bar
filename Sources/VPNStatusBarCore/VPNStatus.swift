@@ -20,11 +20,15 @@ public enum VPNStatus: Equatable {
 
     public var symbolName: String {
         switch self {
-        case .connected: return "network.badge.shield.half.filled"
-        case .connecting, .reconnecting: return "network"
-        case .disconnected, .unconfigured: return "network.slash"
+        case .connected: return "shield.fill"
+        case .connecting, .reconnecting: return "shield"
+        case .disconnected: return "shield.slash.fill"
+        case .unconfigured: return "shield.slash"
         }
     }
+
+    /// 加粗变体：菜单栏建议用 filled，线条更粗、与其他系统图标更搭
+    public var menuBarSymbol: String { symbolName }
 
     public var color: Color {
         switch self {
