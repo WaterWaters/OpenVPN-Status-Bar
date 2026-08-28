@@ -17,7 +17,7 @@ enum NotificationService {
         UNUserNotificationCenter.current().add(req)
     }
 
-    static func notifyConnected(profile: String) { notify(title: "VPN 已连接", body: "\(profile) · 隧道已建立") }
-    static func notifyDisconnected(profile: String) { notify(title: "VPN 已断开", body: "\(profile) · 已断开连接") }
-    static func notifyReconnectFailed(profile: String, attempt: Int) { notify(title: "重连失败", body: "\(profile) · 第 \(attempt) 次重连失败") }
+    static func notifyConnected(profile: String) { notify(title: L10n.tr("notify.connected.title"), body: L10n.tr("notify.connected.body", profile)) }
+    static func notifyDisconnected(profile: String) { notify(title: L10n.tr("notify.disconnected.title"), body: L10n.tr("notify.disconnected.body", profile)) }
+    static func notifyReconnectFailed(profile: String, attempt: Int) { notify(title: L10n.tr("notify.reconnectFailed.title"), body: L10n.tr("notify.reconnectFailed.body", profile, attempt)) }
 }

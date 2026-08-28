@@ -112,15 +112,7 @@ private struct StatusHeader: View {
         }
     }
 
-    private var titleText: String {
-        switch vpn.status {
-        case .unconfigured: return "未配置"
-        case .disconnected: return "已断开"
-        case .connecting: return "连接中…"
-        case .connected: return "已连接"
-        case .reconnecting: return "重连中 · 第 \(vpn.reconnectCount) 次"
-        }
-    }
+    private var titleText: String { vpn.status.title }
 
     private var durationColor: Color {
         switch vpn.status {
@@ -215,18 +207,18 @@ private struct MetaTextView: View {
         let _ = tick.now
         let text: String = {
             switch status {
-            case .unconfigured: return "导入 VPN 配置后开始"
+            case .unconfigured: return L10n.tr("notConfigured")
             case .connected:
-                var s = "VPNStatusBar · \(profileName) · 隧道 10.8.0.0/16"
-                if reconnectCount > 0 { s += " · 已重连 \(reconnectCount) 次" }
+                var s = "VPNStatusBar · \(profileName) · 10.8.0.0/16"
+                if reconnectCount > 0 { s += L10n.tr("status.reconnected.suffix", reconnectCount) }
                 return s
             case .reconnecting:
                 let remaining: Int = {
                     guard let d = retryDeadline else { return 0 }
                     return max(0, Int(d.timeIntervalSince(tick.now).rounded(.up)))
                 }()
-                return "\(remaining) 秒后自动重试"
-            case .connecting: return "正在建立隧道…"
+                return L10n.tr("status.retry", remaining)
+            case .connecting: return L10n.tr("status.connecting.hint")
             case .disconnected: return "VPNStatusBar · \(profileName)"
             }
         }()
@@ -256,11 +248,11 @@ private struct PrimaryActionButton: View {
 
     private var label: String {
         switch vpn.status {
-        case .unconfigured: return "导入配置…"
-        case .disconnected: return "连接 VPN"
-        case .connected: return "断开 VPN"
-        case .connecting: return "连接中…"
-        case .reconnecting: return "立即重连"
+        case .unconfigured: return L10n.tr("status.import")
+        case .disconnected: return L10n.tr("status.connect")
+        case .connected: return L10n.tr("status.disconnect")
+        case .connecting: return L10n.tr("status.connecting")
+        case .reconnecting: return L10n.tr("status.reconnectNow")
         }
     }
 
@@ -339,7 +331,7 @@ private struct AutoReconnectRow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Design.ink2)
                 .frame(width: 16)
-            Text("断线自动重连")
+            Text(L10n.tr("autoreconnect.title"))
                 .font(.system(size: 13))
                 .foregroundStyle(Design.ink)
             Spacer()
@@ -396,13 +388,13 @@ private struct EngineWarnRow: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 11))
                         Text(vpn.engineAuth == .broken
-                             ? "VPN 引擎异常，需修复"
-                             : "VPN 引擎未授权，可能无法连接")
+                             ? L10n.tr("engine.warn.broken")
+                             : L10n.tr("engine.warn.unauthorized"))
                             .font(.system(size: 11))
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 4)
-                        Text("设置 ›")
+                        Text(L10n.tr("engine.warn.settings"))
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .foregroundStyle(Design.dangerInk)
@@ -446,12 +438,12 @@ private struct DiagnosticsSection: View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 2) {
                 if cachedLines.isEmpty {
-                    Text("（暂无日志）")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Design.ink3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    ForEach(Array(cachedLines.enumerated()), id: \.offset) { _, line in
+                    Text(L10n.tr("log.empty"))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Design.ink3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(Array(cachedLines.enumerated()), id: \.offset) { _, line in
                         Text(line)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Design.ink2)
@@ -477,7 +469,7 @@ private struct DiagnosticsSection: View {
                 Image(systemName: "doc.text")
                     .font(.system(size: 11))
                     .foregroundStyle(Design.ink2)
-                Text("日志")
+                Text(L10n.tr("log.title"))
                     .font(.system(size: 12))
                     .foregroundStyle(Design.ink2)
                 Spacer()
@@ -515,7 +507,7 @@ private struct SettingsRow: View {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 11))
                     .foregroundStyle(Design.ink2)
-                Text("设置…")
+                Text(L10n.tr("settings.title") + "…")
                     .font(.system(size: 12))
                     .foregroundStyle(Design.ink2)
                 Spacer()
@@ -549,7 +541,7 @@ private struct FooterQuit: View {
                 Image(systemName: "power")
                     .font(.system(size: 11))
                     .foregroundStyle(Design.ink2)
-                Text("退出 VPNStatusBar")
+                Text(L10n.tr("quit"))
                     .font(.system(size: 12))
                     .foregroundStyle(Design.ink2)
                 Spacer()
@@ -609,7 +601,7 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 .onHover { h in hover = h }
 
-                Text("设置")
+                Text(L10n.tr("settings.title"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Design.ink2)
                 Spacer()
@@ -643,26 +635,26 @@ private struct SettingsAuthSection: View {
         switch auth {
         case .authorized:
             return (Design.okSoft, "checkmark", Design.okSoft2, Design.okInk,
-                    "VPN 引擎 · 已授权", "openvpn 2.6.14 · arm64 · 稳定免密授权")
+                    L10n.tr("auth.engine.authorized"), L10n.tr("auth.engine.authorized.desc"))
         case .authorizing:
             return (Design.busySoft, "clock", Design.busySoft, Design.busyInk,
-                    "VPN 引擎 · 授权中…", "正在写入免密规则 / 安装引擎…")
+                    L10n.tr("auth.engine.authorizing"), L10n.tr("auth.engine.authorizing.desc"))
         case .unauthorized:
             return (Design.paper2, "lock", Design.paper2, Design.ink3,
-                    "VPN 引擎 · 未授权", "需一次授权以建立 VPN 隧道")
+                    L10n.tr("auth.engine.unauthorized"), L10n.tr("auth.engine.unauthorized.desc"))
         case .broken:
             return (Design.dangerSoft, "exclamationmark.triangle.fill", Design.dangerSoft2, Design.dangerInk,
-                    "VPN 引擎 · 异常", "引擎二进制缺失或被移动，需修复")
+                    L10n.tr("auth.engine.broken"), L10n.tr("auth.engine.broken.desc"))
         case .checking:
             return (Design.paper2, "clock", Design.paper2, Design.ink3,
-                    "VPN 引擎 · 检测中…", "请稍候")
+                    L10n.tr("auth.engine.checking"), L10n.tr("auth.engine.checking.desc"))
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Label {
-                Text("授权 · VPN 引擎")
+                Text(L10n.tr("auth.engine"))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Design.ink2)
             } icon: {
@@ -700,23 +692,23 @@ private struct SettingsAuthSection: View {
                 )
 
                 if auth == .authorized {
-                    kvRow("路径", "/usr/local/vpnstatusbar/openvpn", mono: true)
-                    kvRow("架构", "arm64（Intel 机器自编译对应版本）", mono: false)
+                    kvRow(L10n.tr("auth.path"), "/usr/local/vpnstatusbar/openvpn", mono: true)
+                    kvRow(L10n.tr("auth.arch"), "arm64", mono: false)
                 }
 
                 // 操作按钮
                 VStack(spacing: 6) {
                     switch auth {
                     case .unauthorized:
-                        authButton("授权 VPN…", Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onAuthorize)
+                        authButton(L10n.tr("auth.authorize"), Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onAuthorize)
                     case .authorizing:
-                        authButtonDisabled("授权中…", spinner: true)
+                        authButtonDisabled(L10n.tr("auth.authorizing"), spinner: true)
                     case .broken:
-                        authButton("修复并重新授权…", Design.dangerSoft, Design.dangerSoft2, Design.dangerRule, Design.dangerInk, action: onAuthorize)
+                        authButton(L10n.tr("auth.repair"), Design.dangerSoft, Design.dangerSoft2, Design.dangerRule, Design.dangerInk, action: onAuthorize)
                     case .authorized:
-                        authButton("重新授权…", Design.paper2, Design.paper3, Design.rule, Design.ink2, action: onAuthorize)
+                        authButton(L10n.tr("auth.reauthorize"), Design.paper2, Design.paper3, Design.rule, Design.ink2, action: onAuthorize)
                     case .checking:
-                        authButtonDisabled("检测中…", spinner: false)
+                        authButtonDisabled(L10n.tr("auth.checking"), spinner: false)
                     }
                 }
                 .padding(10)
@@ -730,7 +722,7 @@ private struct SettingsAuthSection: View {
                     .strokeBorder(Design.rule, lineWidth: 1)
             )
 
-            Text("授权用于以系统管理员身份建立 VPN 隧道，仅需一次。若授权弹窗被误关，点上方按钮再次发起即可。")
+            Text(L10n.tr("auth.engine.hint"))
                 .font(.system(size: 10))
                 .foregroundStyle(Design.ink3)
                 .lineSpacing(2)
@@ -809,7 +801,7 @@ private struct SettingsConfigSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Label {
-                Text("连接配置")
+                Text(L10n.tr("connection.config"))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Design.ink2)
             } icon: {
@@ -821,10 +813,10 @@ private struct SettingsConfigSection: View {
             VStack(spacing: 0) {
                 if vpn.profiles.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("尚未导入配置")
+                        Text(L10n.tr("connection.notConfigured"))
                             .font(.system(size: 12))
                             .foregroundStyle(Design.ink2)
-                        cfgButton("导入配置…", Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onImport)
+                        cfgButton(L10n.tr("connection.import"), Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onImport)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity)
@@ -854,14 +846,14 @@ private struct SettingsConfigSection: View {
                         }.buttonStyle(.plain)
                         Divider().overlay(Design.rule)
                     }
-                    cfgRow("当前", vpn.profileName)
-                    cfgRow("服务器", vpn.serverAddress)
-                    cfgRow("用户名", vpn.username)
+                    cfgRow(L10n.tr("connection.current"), vpn.profileName)
+                    cfgRow(L10n.tr("connection.server"), vpn.serverAddress)
+                    cfgRow(L10n.tr("connection.username"), vpn.username)
                     VStack(spacing: 6) {
-                        cfgButton("修改当前配置…", Design.paper2, Design.paper3, Design.rule, Design.ink2, action: onEdit)
-                        cfgButton("新增配置…", Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onImport)
+                        cfgButton(L10n.tr("connection.edit"), Design.paper2, Design.paper3, Design.rule, Design.ink2, action: onEdit)
+                        cfgButton(L10n.tr("connection.add"), Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onImport)
                         Button(action: onClear) {
-                            Text("删除当前配置…").font(.system(size: 11)).foregroundStyle(Design.danger)
+                            Text(L10n.tr("connection.deleteCurrent")).font(.system(size: 11)).foregroundStyle(Design.danger)
                         }.buttonStyle(.plain)
                     }
                     .padding(.top, 8).padding(.horizontal, 10).padding(.bottom, 10)
@@ -875,13 +867,13 @@ private struct SettingsConfigSection: View {
             // 偏好：开机启动与通知（泛化通用）
             VStack(spacing: 8) {
                 HStack {
-                    Label("开机启动", systemImage: "power").font(.system(size: 11)).foregroundStyle(Design.ink2)
+                    Label(L10n.tr("launchAtLogin"), systemImage: "power").font(.system(size: 11)).foregroundStyle(Design.ink2)
                     Spacer()
                     Toggle("", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.setEnabled($0) }))
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
                 HStack {
-                    Label("通知", systemImage: "bell").font(.system(size: 11)).foregroundStyle(Design.ink2)
+                    Label(L10n.tr("notifications"), systemImage: "bell").font(.system(size: 11)).foregroundStyle(Design.ink2)
                     Spacer()
                     Toggle("", isOn: Binding(get: { UserDefaults.standard.bool(forKey: "notifyEnabled") }, set: { UserDefaults.standard.set($0, forKey: "notifyEnabled"); if $0 { NotificationService.requestAuthorizationIfNeeded() } }))
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
@@ -971,7 +963,7 @@ struct SetupWizard: View {
                 .buttonStyle(.plain)
                 .onHover { h in hover = h }
 
-                Text("\(isEdit ? "修改配置" : "配置 VPN") · 第 \(step) / 3 步")
+                Text(L10n.tr("wizard.step", isEdit ? L10n.tr("wizard.editTitle") : L10n.tr("wizard.importTitle"), step))
                     .font(.system(size: 12))
                     .foregroundStyle(Design.ink2)
                 Spacer()
@@ -1001,10 +993,10 @@ struct SetupWizard: View {
                         Image(systemName: "doc")
                             .font(.system(size: 16))
                             .foregroundStyle(Design.ink3)
-                        Text("把 .ovpn 文件拖到这里")
+                        Text(L10n.tr("wizard.drop"))
                             .font(.system(size: 12))
                             .foregroundStyle(Design.ink2)
-                        Button("选择文件…") {
+                        Button(L10n.tr("wizard.selectFile")) {
                             pickFile()
                         }
                         .buttonStyle(.plain)
@@ -1056,7 +1048,7 @@ struct SetupWizard: View {
             Button {
                 step = 2
             } label: {
-                Text("下一步")
+                Text(L10n.tr("wizard.next"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Design.okInk)
                     .frame(maxWidth: .infinity)
@@ -1076,7 +1068,7 @@ struct SetupWizard: View {
 
             if isEdit {
                 // 修改模式：保留当前配置直接下一步
-                Button("保留当前配置，直接修改凭据") {
+                Button(L10n.tr("wizard.keepCurrent")) {
                     step = 2
                 }
                 .buttonStyle(.plain)
@@ -1092,10 +1084,10 @@ struct SetupWizard: View {
     private var stepAuth: some View {
         VStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("用户名")
+                Text(L10n.tr("wizard.username"))
                     .font(.system(size: 11))
                     .foregroundStyle(Design.ink2)
-                TextField("例如 user01", text: $username)
+                TextField(L10n.tr("wizard.username.placeholder"), text: $username)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .padding(.horizontal, 8)
@@ -1111,10 +1103,10 @@ struct SetupWizard: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("密码")
+                Text(L10n.tr("wizard.password"))
                     .font(.system(size: 11))
                     .foregroundStyle(Design.ink2)
-                SecureField(isEdit ? "留空保持原密码" : "••••••••", text: $password)
+                SecureField(isEdit ? L10n.tr("wizard.password.keep") : "••••••••", text: $password)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .padding(.horizontal, 8)
@@ -1129,9 +1121,7 @@ struct SetupWizard: View {
                     )
             }
 
-            Text(isEdit
-                 ? "密码留空表示保持原密码；仅在填写时更新。"
-                 : "密码仅存入 macOS 钥匙串（Keychain），连接时临时生成认证文件，断开即删除。")
+            Text(isEdit ? L10n.tr("wizard.password.hint.edit") : L10n.tr("wizard.password.hint"))
                 .font(.system(size: 10))
                 .foregroundStyle(Design.ink3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1147,7 +1137,7 @@ struct SetupWizard: View {
                 Button {
                     save()
                 } label: {
-                    Text("保存并完成")
+                    Text(L10n.tr("wizard.save"))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(isValidAuth ? Design.okInk : Design.ink3)
                         .frame(maxWidth: .infinity)
@@ -1164,7 +1154,7 @@ struct SetupWizard: View {
                 .buttonStyle(.plain)
                 .disabled(!isValidAuth)
 
-                Button("上一步") {
+                Button(L10n.tr("wizard.back")) {
                     step = 1
                 }
                 .buttonStyle(.plain)
@@ -1193,10 +1183,10 @@ struct SetupWizard: View {
                     .font(.system(size: 22))
                     .foregroundStyle(Design.ok)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(isEdit ? "配置已更新" : "配置已保存")
+                    Text(isEdit ? L10n.tr("wizard.updated") : L10n.tr("wizard.saved"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Design.ink)
-                    Text("\(pickedName) · \(username) · 密码已存入钥匙串")
+                    Text(L10n.tr("wizard.saved.desc", pickedName, username))
                         .font(.system(size: 11))
                         .foregroundStyle(Design.ink2)
                 }
@@ -1215,7 +1205,7 @@ struct SetupWizard: View {
             Button {
                 onDone()
             } label: {
-                Text("完成")
+                Text(L10n.tr("wizard.done"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Design.okInk)
                     .frame(maxWidth: .infinity)
@@ -1237,7 +1227,7 @@ struct SetupWizard: View {
 
     private func pickFile() {
         let panel = NSOpenPanel()
-        panel.title = "选择 OpenVPN 配置文件"
+        panel.title = L10n.tr("wizard.pick.title")
         panel.allowedContentTypes = [UTType(filenameExtension: "ovpn") ?? .data]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false

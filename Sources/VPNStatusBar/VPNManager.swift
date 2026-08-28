@@ -189,13 +189,13 @@ final class VPNManager: ObservableObject {
                 retryDeadline = nil
                 isWaitingRetry = false
                 status = .disconnected
-                lastEvent = "已停止自动重连"
+                lastEvent = L10n.tr("event.stoppedReconnect")
             }
         }
     }
     @Published var reconnectCount: Int = 0
     @Published var connectedAt: Date?
-    @Published var lastEvent: String = "就绪"
+    @Published var lastEvent: String = "Ready"
     @Published var logTail: String = ""
     var desiredConnectedPublic: Bool { desiredConnected }
     /// VPN 引擎授权状态（连接前置校验 + 设置页展示）
@@ -235,7 +235,7 @@ final class VPNManager: ObservableObject {
         refreshProfiles()
         // 切换后收敛状态
         status = isConfigured ? .disconnected : .unconfigured
-        lastEvent = "已切换配置：\(profileName)"
+        lastEvent = L10n.tr("event.profileSwitched", profileName)
         loadLogTail()
     }
 
@@ -245,7 +245,7 @@ final class VPNManager: ObservableObject {
         refreshProfiles()
         if wasActive {
             status = isConfigured ? .disconnected : .unconfigured
-            lastEvent = "配置已删除"
+            lastEvent = L10n.tr("event.profileDeleted")
         }
     }
 
@@ -256,7 +256,7 @@ final class VPNManager: ObservableObject {
         // 轻量初始：仅文件存在性快速判断，不触发 Keychain IPC；日志/授权异步
         let quickConfigured = FileManager.default.fileExists(atPath: configPath) || !profiles.isEmpty
         status = quickConfigured ? .disconnected : .unconfigured
-        lastEvent = quickConfigured ? "就绪" : "尚未导入 VPN 配置"
+        lastEvent = quickConfigured ? L10n.tr("event.ready") : L10n.tr("event.noProfile")
         // 延迟非关键任务，避免阻塞启动首帧
         startMonitoring()
         startClock()
@@ -276,7 +276,7 @@ final class VPNManager: ObservableObject {
             DispatchQueue.main.async {
                 if !real && self.status == .disconnected && quickConfigured {
                     self.status = .unconfigured
-                    self.lastEvent = "尚未导入 VPN 配置"
+                    self.lastEvent = L10n.tr("event.noProfile")
                 }
             }
         }
@@ -311,7 +311,7 @@ final class VPNManager: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.engineAuth = result
-                if result == .authorized { self.lastEvent = "VPN 引擎已授权" }
+                if result == .authorized { self.lastEvent = L10n.tr("event.engineAuthorized") }
             }
         }
     }
@@ -338,15 +338,15 @@ final class VPNManager: ObservableObject {
         guard engineAuth != .authorizing else { return }
         let repairing = (engineAuth == .broken)
         engineAuth = .authorizing
-        lastEvent = repairing ? "正在修复并授权 VPN 引擎…" : "正在授权 VPN 引擎…"
+        lastEvent = repairing ? L10n.tr("event.repairing") : L10n.tr("event.authorizing")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let ok = self.installEnginePrivileged()
             DispatchQueue.main.async {
                 if ok {
-                    self.lastEvent = "VPN 引擎已授权"
+                    self.lastEvent = L10n.tr("event.engineAuthorized")
                 } else {
-                    self.lastEvent = "授权未完成：弹窗被取消。可在设置中重试。"
+                    self.lastEvent = L10n.tr("event.authCancelled")
                 }
                 self.refreshEngineAuth()
             }
@@ -410,20 +410,20 @@ final class VPNManager: ObservableObject {
             store.update(updated)
             if let pwd = password {
                 if !Keychain.savePassword(pwd, account: store.keychainAccount(for: active.id)) {
-                    lastEvent = "凭据保存失败（钥匙串）"
+                    lastEvent = L10n.tr("event.credFailed")
                     return
                 }
             }
             refreshProfiles()
             status = .disconnected
-            lastEvent = "配置已更新：\(fileName)"
+            lastEvent = L10n.tr("event.profileSaved", fileName)
             loadLogTail()
             return
         }
         let p = store.add(ovpnData: ovpnData, fileName: fileName, username: username)
         if let pwd = password {
             if !Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id)) {
-                lastEvent = "凭据保存失败（钥匙串）"
+                lastEvent = L10n.tr("event.credFailed")
                 return
             }
         } else if let legacyPwd = Keychain.loadPassword(account: legacyKeychainAccount) {
@@ -434,7 +434,7 @@ final class VPNManager: ObservableObject {
         UserDefaults.standard.set(fileName, forKey: kProfileName)
         UserDefaults.standard.set(username, forKey: kUsername)
         status = .disconnected
-        lastEvent = "配置已保存：\(fileName)"
+        lastEvent = L10n.tr("event.profileSaved", fileName)
         loadLogTail()
     }
 
@@ -449,7 +449,7 @@ final class VPNManager: ObservableObject {
             _ = Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id))
         }
         refreshProfiles()
-        lastEvent = "凭据已更新"
+        lastEvent = L10n.tr("event.credUpdated")
     }
 
     /// 清除配置（多配置：删除当前档案；兼容旧单文件）
@@ -476,7 +476,7 @@ final class VPNManager: ObservableObject {
         invalidateServerAddressCache()
 
         status = isConfigured ? .disconnected : .unconfigured
-        lastEvent = profiles.isEmpty ? "配置已清除" : "已删除当前配置"
+        lastEvent = profiles.isEmpty ? L10n.tr("event.profileCleared") : L10n.tr("event.profileDeleted")
         loadLogTail()
     }
 
@@ -485,7 +485,7 @@ final class VPNManager: ObservableObject {
     /// 连接 VPN
     func connect() {
         guard isConfigured else {
-            lastEvent = "请先导入 VPN 配置"
+            lastEvent = L10n.tr("event.needConfig")
             status = .unconfigured
             return
         }
@@ -493,17 +493,17 @@ final class VPNManager: ObservableObject {
         switch engineAuth {
         case .checking:
             refreshEngineAuth()
-            lastEvent = "VPN 引擎检测中，请稍候…"
+            lastEvent = L10n.tr("event.engineChecking")
         case .authorizing:
-            lastEvent = "VPN 引擎授权中，请稍候…"
+            lastEvent = L10n.tr("event.engineAuthorizing")
             status = .disconnected
             return
         case .unauthorized:
-            lastEvent = "VPN 引擎未授权：点「设置…」→「授权 VPN…」"
+            lastEvent = L10n.tr("event.engineUnauthorized")
             status = .disconnected
             return
         case .broken:
-            lastEvent = "VPN 引擎异常：点「设置…」→「修复并重新授权…」"
+            lastEvent = L10n.tr("event.engineBroken")
             status = .disconnected
             return
         case .authorized:
@@ -515,7 +515,7 @@ final class VPNManager: ObservableObject {
         retryDelay = 5
         isWaitingRetry = false
         retryDeadline = nil
-        lastEvent = "发起连接…"
+        lastEvent = L10n.tr("event.connecting")
         // 清理上次异常退出残留的 openvpn 实例（否则 management 端口被占，新实例无法启动）
         stopExistingInstance()
         startVPNProcess()
@@ -528,14 +528,14 @@ final class VPNManager: ObservableObject {
         retryTimer = nil
         retryDeadline = nil
         isWaitingRetry = false
-        lastEvent = "执行自动重连…"
+        lastEvent = L10n.tr("event.reconnectNow")
         startVPNProcess()
     }
 
     /// 检测并优雅停止残留的 openvpn 实例（app 崩溃/强杀后可能遗留）
     private func stopExistingInstance() {
         guard sendManagementCommand("signal SIGTERM\n") != nil else { return }
-        lastEvent = "发现残留连接，正在清理…"
+        lastEvent = L10n.tr("event.foundStale")
         Thread.sleep(forTimeInterval: 1.5)
     }
 
@@ -552,7 +552,7 @@ final class VPNManager: ObservableObject {
         retryDeadline = nil
         isWaitingRetry = false
         status = .disconnected
-        lastEvent = "正在断开…"
+        lastEvent = L10n.tr("event.disconnecting")
         // 优先通过 openvpn management 接口优雅退出（无需 root 权限）
         let resp = sendManagementCommand("signal SIGTERM\n")
         if resp == nil {
@@ -562,7 +562,7 @@ final class VPNManager: ObservableObject {
         process = nil
         cleanupAuthFile()
         loadLogTail()
-        lastEvent = "已手动断开"
+        lastEvent = L10n.tr("event.disconnectedManual")
     }
 
     /// 退出前清理
@@ -587,7 +587,7 @@ final class VPNManager: ObservableObject {
 
         // 由 app 生成 auth 文件（用户名 + Keychain 密码），0600 权限
         guard writeAuthFile() else {
-            lastEvent = "无法生成认证文件，请检查配置"
+            lastEvent = L10n.tr("event.authFailed")
             status = .disconnected
             return
         }
@@ -619,13 +619,13 @@ final class VPNManager: ObservableObject {
             if status != .connected {
                 status = .connecting
             }
-            lastEvent = "openvpn 已启动"
+            lastEvent = L10n.tr("event.openvpnStarted")
             // 启动后立即读一次日志
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.loadLogTail()
             }
         } catch {
-            lastEvent = "启动失败：\(error.localizedDescription)"
+            lastEvent = L10n.tr("event.startFailed", error.localizedDescription)
             status = .disconnected
         }
     }
@@ -723,7 +723,7 @@ final class VPNManager: ObservableObject {
         guard autoReconnect else {
             status = .disconnected
             retryDeadline = nil
-            lastEvent = "隧道已断开（自动重连已关闭）"
+            lastEvent = L10n.tr("event.autoReconnectOff")
             loadLogTail()
             return
         }
@@ -742,7 +742,7 @@ final class VPNManager: ObservableObject {
 
         reconnectCount += 1
         status = .reconnecting(attempt: reconnectCount)
-        lastEvent = "连接断开，\(Int(retryDelay)) 秒后自动重连…"
+        lastEvent = L10n.tr("event.reconnectIn", Int(retryDelay))
         loadLogTail()
         isWaitingRetry = true
         scheduleRetry()
@@ -756,7 +756,7 @@ final class VPNManager: ObservableObject {
             self.isWaitingRetry = false
             self.retryDeadline = nil
             guard self.desiredConnected, !self.manualDisconnect else { return }
-            self.lastEvent = "执行自动重连…"
+            self.lastEvent = L10n.tr("event.reconnectNow")
             self.startVPNProcess()
         }
         retryDelay = min(retryDelay * 2, maxRetryDelay)
@@ -819,7 +819,7 @@ final class VPNManager: ObservableObject {
                     retryDeadline = nil
                     status = .connected
                     connectedAt = Date()
-                    lastEvent = "隧道已建立"
+                    lastEvent = L10n.tr("event.tunnelEstablished")
                     loadLogTail()
                 }
             } else if procRunning && !hasRoute {
