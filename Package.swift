@@ -3,18 +3,21 @@ import PackageDescription
 
 let package = Package(
     name: "VPNStatusBar",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v13)
     ],
     targets: [
         .target(
             name: "VPNStatusBarCore",
-            path: "Sources/VPNStatusBarCore"
+            path: "Sources/VPNStatusBarCore",
+            resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "VPNStatusBar",
             dependencies: ["VPNStatusBarCore"],
-            path: "Sources/VPNStatusBar"
+            path: "Sources/VPNStatusBar",
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "VPNStatusBarCoreTests",

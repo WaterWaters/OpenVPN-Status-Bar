@@ -10,11 +10,11 @@ public enum VPNStatus: Equatable {
 
     public var title: String {
         switch self {
-        case .unconfigured: return "未配置"
-        case .disconnected: return "已断开"
-        case .connecting: return "连接中…"
-        case .connected: return "已连接"
-        case .reconnecting(let attempt): return "重连中（第 \(attempt) 次）"
+        case .unconfigured: return L10nCore.tr("status.unconfigured")
+        case .disconnected: return L10nCore.tr("status.disconnected")
+        case .connecting: return L10nCore.tr("status.connecting")
+        case .connected: return L10nCore.tr("status.connected")
+        case .reconnecting(let attempt): return L10nCore.tr("status.reconnecting", attempt)
         }
     }
 

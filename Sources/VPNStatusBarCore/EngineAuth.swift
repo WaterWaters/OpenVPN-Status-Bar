@@ -10,11 +10,11 @@ public enum EngineAuth: Equatable {
 
     public var summary: String {
         switch self {
-        case .checking: return "VPN 引擎检测中…"
-        case .authorized: return "VPN 引擎已授权"
-        case .unauthorized: return "VPN 引擎未授权（需要授权 VPN）"
-        case .broken: return "VPN 引擎异常（需要修复）"
-        case .authorizing: return "VPN 引擎授权中…"
+        case .checking: return L10nCore.tr("engine.checking")
+        case .authorized: return L10nCore.tr("engine.authorized")
+        case .unauthorized: return L10nCore.tr("engine.unauthorized")
+        case .broken: return L10nCore.tr("engine.broken")
+        case .authorizing: return L10nCore.tr("engine.authorizing")
         }
     }
 }

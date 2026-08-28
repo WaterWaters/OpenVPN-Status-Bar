@@ -1,0 +1,13 @@
+/* VPNStatus */
+"status.unconfigured" = "未配置";
+"status.disconnected" = "已断开";
+"status.connecting" = "连接中…";
+"status.connected" = "已连接";
+"status.reconnecting" = "重连中（第 %d 次）";
+
+/* EngineAuth */
+"engine.checking" = "VPN 引擎检测中…";
+"engine.authorized" = "VPN 引擎已授权";
+"engine.unauthorized" = "VPN 引擎未授权（需要授权 VPN）";
+"engine.broken" = "VPN 引擎异常（需要修复）";
+"engine.authorizing" = "VPN 引擎授权中…";
