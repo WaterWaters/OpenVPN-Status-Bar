@@ -29,7 +29,12 @@ struct ContentView: View {
         }
         .padding(PanelMetrics.padding)
         .frame(width: PanelMetrics.width)
-        .background(Design.paper)
+        .background(
+            ZStack {
+                VisualEffectView(material: .menu, blendingMode: .behindWindow)
+                Design.paper.opacity(0.92)
+            }
+        )
         .animation(.easeInOut(duration: 0.2), value: showSettings || showSetup)
     }
 
@@ -135,6 +140,7 @@ private struct StatusHeader: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(tile.fg)
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: vpn.status)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -436,76 +442,59 @@ private struct DiagnosticsSection: View {
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    expanded.toggle()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Design.ink2)
-                    Text("日志")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Design.ink2)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 2) {
+                if cachedLines.isEmpty {
+                    Text("（暂无日志）")
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Design.ink3)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 6)
-                .frame(height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Design.paper2)
-                )
-            }
-            .buttonStyle(.plain)
-
-            if expanded {
-                VStack(alignment: .leading, spacing: 2) {
-                    if cachedLines.isEmpty {
-                        Text("（暂无日志）")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(Array(cachedLines.enumerated()), id: \.offset) { _, line in
+                        Text(line)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Design.ink3)
+                            .foregroundStyle(Design.ink2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ForEach(Array(cachedLines.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Design.ink2)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
                     }
                 }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Design.paper3)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(Design.rule, lineWidth: 1)
-                )
             }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Design.paper3)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Design.rule, lineWidth: 1)
+            )
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Design.ink2)
+                Text("日志")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Design.ink2)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 6)
+            .frame(height: 26)
         }
+        .tint(Design.ink3)
         .onAppear { cachedLines = makeLines(from: vpn.logTail) }
         .onChange(of: vpn.logTail) { tail in
             cachedLines = makeLines(from: tail)
         }
         .onChange(of: vpn.status) { newStatus in
-            // 重连 / 连接中自动展开日志
             switch newStatus {
             case .reconnecting, .connecting:
-                withAnimation(.easeInOut(duration: 0.25)) { expanded = true }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { expanded = true }
             default:
                 break
             }
@@ -829,25 +818,7 @@ private struct SettingsConfigSection: View {
             }
 
             VStack(spacing: 0) {
-                if vpn.isConfigured {
-                    cfgRow("配置", vpn.profileName)
-                    cfgRow("服务器", vpn.serverAddress)
-                    cfgRow("用户名", vpn.username)
-                    VStack(spacing: 6) {
-                        cfgButton("修改配置…", Design.paper2, Design.paper3, Design.rule, Design.ink2, action: onEdit)
-                        Button(action: onClear) {
-                            Text("清除配置…")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Design.danger)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.top, 8)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
-                    .frame(maxWidth: .infinity)
-                    .background(Design.paper2)
-                } else {
+                if vpn.profiles.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("尚未导入配置")
                             .font(.system(size: 12))
@@ -857,12 +828,67 @@ private struct SettingsConfigSection: View {
                     .padding(10)
                     .frame(maxWidth: .infinity)
                     .background(Design.paper2)
+                } else {
+                    // 多配置列表（最多显示全部，active 高亮）
+                    ForEach(vpn.profiles, id: \.id) { p in
+                        let isActive = vpn.activeProfile?.id == p.id
+                        Button(action: { vpn.switchProfile(id: p.id) }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: isActive ? "checkmark.circle.fill" : "doc")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(isActive ? Design.ok : Design.ink3)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(p.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(Design.ink).lineLimit(1)
+                                    Text(p.serverAddress).font(.system(size: 10)).foregroundStyle(Design.ink3).lineLimit(1)
+                                }
+                                Spacer()
+                                if vpn.profiles.count > 1 {
+                                    Button(action: { vpn.deleteProfile(id: p.id) }) {
+                                        Image(systemName: "trash").font(.system(size: 10)).foregroundStyle(Design.danger)
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(isActive ? Design.okSoft.opacity(0.6) : Design.paper2)
+                        }.buttonStyle(.plain)
+                        Divider().overlay(Design.rule)
+                    }
+                    cfgRow("当前", vpn.profileName)
+                    cfgRow("服务器", vpn.serverAddress)
+                    cfgRow("用户名", vpn.username)
+                    VStack(spacing: 6) {
+                        cfgButton("修改当前配置…", Design.paper2, Design.paper3, Design.rule, Design.ink2, action: onEdit)
+                        cfgButton("新增配置…", Design.okSoft, Design.okSoft2, Design.okRule, Design.okInk, action: onImport)
+                        Button(action: onClear) {
+                            Text("删除当前配置…").font(.system(size: 11)).foregroundStyle(Design.danger)
+                        }.buttonStyle(.plain)
+                    }
+                    .padding(.top, 8).padding(.horizontal, 10).padding(.bottom, 10)
+                    .frame(maxWidth: .infinity).background(Design.paper2)
                 }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Design.rule, lineWidth: 1)
             )
+            // 偏好：开机启动与通知（泛化通用）
+            VStack(spacing: 8) {
+                HStack {
+                    Label("开机启动", systemImage: "power").font(.system(size: 11)).foregroundStyle(Design.ink2)
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.setEnabled($0) }))
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+                HStack {
+                    Label("通知", systemImage: "bell").font(.system(size: 11)).foregroundStyle(Design.ink2)
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { UserDefaults.standard.bool(forKey: "notifyEnabled") }, set: { UserDefaults.standard.set($0, forKey: "notifyEnabled"); if $0 { NotificationService.requestAuthorizationIfNeeded() } }))
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Design.paper2))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Design.rule, lineWidth: 1))
         }
     }
 

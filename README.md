@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-一个 macOS 菜单栏 VPN 小工具：点一下菜单栏图标就能连接 / 断开公司 VPN，断线自动重连，全程无需命令行。
+一个 macOS 菜单栏 VPN 小工具：点一下菜单栏图标就能连接 / 断开 VPN，断线自动重连，全程无需命令行。支持任意标准 OpenVPN 配置。
 
 **内置 openvpn 引擎，开箱即用** —— 不需要安装 Homebrew，也无需手动配置任何权限。
 

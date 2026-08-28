@@ -81,7 +81,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDisplayName</key>
     <string>VPNStatusBar</string>
     <key>CFBundleIdentifier</key>
-    <string>local.zhongtang.vpnstatusbar</string>
+    <string>io.vpnstatusbar</string>
     <key>CFBundleVersion</key>
     <string>0.0.1</string>
     <key>CFBundleShortVersionString</key>
@@ -125,8 +125,8 @@ fi
 cat > "$DIST_DIR/使用说明.md" <<'MD'
 # VPNStatusBar — 状态栏工具
 
-菜单栏一键连接/断开公司 VPN，断线自动重连（应对远端 30 分钟强制断开）。
-**v3 起 openvpn 已内置进 app，无需安装任何东西；只需在设置里授权一次。**
+菜单栏一键连接/断开 VPN，断线自动重连（应对远端定时断开）。
+**openvpn 已内置进 app，无需安装任何东西；只需在设置里授权一次。支持任意标准 .ovpn 配置。**
 
 ## 安装（每台电脑只需两分钟）
 
@@ -175,7 +175,7 @@ cat > "$DIST_DIR/使用说明.md" <<'MD'
 | 点连接提示"引擎未授权" | 面板底部「设置…」→「授权 VPN…」→ 输一次开机密码 |
 | 设置显示"引擎异常" | 「设置…」→「修复并重新授权…」（重装引擎并补授权） |
 | 连接报错 sudo 需要密码 | 到「设置…」重新「授权 VPN…」，确保授权弹窗完成 |
-| 点连接没反应 | 看面板「日志」，把日志发管理员 |
+| 点连接没反应 | 看面板「日志」，导出后反馈 |
 MD
 
 echo "✅ 分发包已生成: $DIST_DIR"

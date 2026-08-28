@@ -25,13 +25,27 @@ final class VPNManager: ObservableObject {
     }()
     private var configDir: String { _configDir }
 
-    /// 导入的 ovpn 配置（复制存储，原文件可删除）
-    var configPath: String { "\(configDir)/config.ovpn" }
+    /// 导入的 ovpn 配置（多配置：activeProfile 对应文件；兼容 legacy 单文件）
+    var configPath: String {
+        if let p = store.activeProfile() { return store.ovpnPath(for: p.id) }
+        return "\(configDir)/config.ovpn"
+    }
     /// 连接时临时生成的认证文件（0600，断开即删）
     private var authFile: String { "\(configDir)/.auth.tmp" }
     /// 日志文件（openvpn 输出，供面板展示）
     var logFile: String { "\(configDir)/vpn.log" }
     private let routePattern = "10.8/16"
+
+    // 多配置
+    let store = ProfileStore.shared
+    @Published var profiles: [VPNProfile] = []
+
+    var activeProfile: VPNProfile? { store.activeProfile() }
+
+    private var activeKeychainAccount: String {
+        if let p = activeProfile { return store.keychainAccount(for: p.id) }
+        return store.legacyAccount
+    }
 
     // 启动期缓存
     private var cachedIsConfigured: Bool?
@@ -45,18 +59,25 @@ final class VPNManager: ObservableObject {
         Bundle.main.resourceURL?.appendingPathComponent("openvpn").path
     }
 
-    /// Keychain 中用户名/密码的存储标识
+    /// Keychain 中用户名/密码的存储标识（兼容旧单账户，实际按 profile 区分）
     private let keychainAccount = "vpn-user"
+    let legacyKeychainAccount = "vpn-user"
 
-    /// 用户默认键
+    /// 用户默认键（保留兼容，实际主数据源为 ProfileStore）
     private let kProfileName = "vpn.profileName"
     private let kUsername = "vpn.username"
 
-    /// 是否已导入配置（带缓存，避免启动期频繁 Keychain IPC）
+    /// 是否已导入配置（多配置感知 + 缓存）
     var isConfigured: Bool {
         if let cached = cachedIsConfigured { return cached }
+        // 多配置路径
+        if !profiles.isEmpty {
+            let result = activeProfile != nil && FileManager.default.fileExists(atPath: configPath)
+                && Keychain.loadPassword(account: activeKeychainAccount) != nil
+            cachedIsConfigured = result
+            return result
+        }
         let exists = FileManager.default.fileExists(atPath: configPath)
-        // 启动期快速路径：文件不存在直接返回，避免 Keychain 调用
         guard exists else {
             cachedIsConfigured = false
             return false
@@ -71,19 +92,32 @@ final class VPNManager: ObservableObject {
         cachedIsConfigured = nil
     }
 
-    /// 配置文件名（导入时记录原始文件名，用于元信息行显示）
+    /// 配置文件名（多配置优先）
     var profileName: String {
-        UserDefaults.standard.string(forKey: kProfileName) ?? "VPN"
+        if let p = activeProfile { return p.name }
+        return UserDefaults.standard.string(forKey: kProfileName) ?? "VPN"
     }
 
-    /// 用户名（鉴权用；密码在 Keychain）
+    /// 用户名（多配置优先）
     var username: String {
-        get { UserDefaults.standard.string(forKey: kUsername) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: kUsername) }
+        get {
+            if let p = activeProfile { return p.username }
+            return UserDefaults.standard.string(forKey: kUsername) ?? ""
+        }
+        set {
+            if var p = activeProfile {
+                p.username = newValue
+                store.update(p)
+                refreshProfiles()
+            } else {
+                UserDefaults.standard.set(newValue, forKey: kUsername)
+            }
+        }
     }
 
-    /// 服务器地址（从 config.ovpn 的 remote 行解析，供设置页展示，带缓存）
+    /// 服务器地址（多配置优先，带缓存）
     var serverAddress: String {
+        if let p = activeProfile { return p.serverAddress }
         if serverAddressLoaded, let cached = cachedServerAddress { return cached }
         guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
             cachedServerAddress = "—"
@@ -118,14 +152,11 @@ final class VPNManager: ObservableObject {
            FileManager.default.fileExists(atPath: bundled) {
             return bundled
         }
-        // 2. 兼容旧环境：上一级文件夹 / 常见分发位置
+        // 2. 通用回退：app 旁常见位置（已去中唐硬编码）
         let bundle = Bundle.main.bundleURL
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let candidates = [
             bundle.deletingLastPathComponent().appendingPathComponent("vpn-runner.sh").path,
             bundle.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("vpn-runner.sh").path,
-            home.appendingPathComponent("Documents/VPN/zhongTang/vpn-runner.sh").path,
-            home.appendingPathComponent("VPN/zhongTang/vpn-runner.sh").path,
         ]
         for c in candidates where FileManager.default.fileExists(atPath: c) {
             return c
@@ -134,7 +165,21 @@ final class VPNManager: ObservableObject {
     }()
 
     // MARK: - 发布状态
-    @Published var status: VPNStatus = .unconfigured
+    @Published var status: VPNStatus = .unconfigured {
+        didSet {
+            if oldValue != status {
+                switch status {
+                case .connected:
+                    NotificationService.notifyConnected(profile: profileName)
+                case .disconnected:
+                    if oldValue.isConnected || oldValue.isBusy { NotificationService.notifyDisconnected(profile: profileName) }
+                case .reconnecting(let attempt) where attempt >= 3:
+                    NotificationService.notifyReconnectFailed(profile: profileName, attempt: attempt)
+                default: break
+                }
+            }
+        }
+    }
     @Published var autoReconnect: Bool = true {
         didSet {
             // 重连等待中关闭自动重连 → 立即停止重连
@@ -152,6 +197,7 @@ final class VPNManager: ObservableObject {
     @Published var connectedAt: Date?
     @Published var lastEvent: String = "就绪"
     @Published var logTail: String = ""
+    var desiredConnectedPublic: Bool { desiredConnected }
     /// VPN 引擎授权状态（连接前置校验 + 设置页展示）
     @Published private(set) var engineAuth: EngineAuth = .checking
     /// 下一次自动重连的触发时刻（重连中用于倒计时显示）
@@ -178,9 +224,37 @@ final class VPNManager: ObservableObject {
     /// 是否已处于等待重连状态（防止 refreshState 反复调度导致重连被无限推迟）
     private var isWaitingRetry = false
 
+    func refreshProfiles() {
+        profiles = store.loadAll()
+        cachedIsConfigured = nil
+        invalidateServerAddressCache()
+    }
+
+    func switchProfile(id: String) {
+        store.setActiveId(id)
+        refreshProfiles()
+        // 切换后收敛状态
+        status = isConfigured ? .disconnected : .unconfigured
+        lastEvent = "已切换配置：\(profileName)"
+        loadLogTail()
+    }
+
+    func deleteProfile(id: String) {
+        let wasActive = store.activeId() == id
+        store.remove(id: id)
+        refreshProfiles()
+        if wasActive {
+            status = isConfigured ? .disconnected : .unconfigured
+            lastEvent = "配置已删除"
+        }
+    }
+
     private init() {
+        // 迁移旧单文件
+        store.migrateIfNeeded()
+        profiles = store.loadAll()
         // 轻量初始：仅文件存在性快速判断，不触发 Keychain IPC；日志/授权异步
-        let quickConfigured = FileManager.default.fileExists(atPath: configPath)
+        let quickConfigured = FileManager.default.fileExists(atPath: configPath) || !profiles.isEmpty
         status = quickConfigured ? .disconnected : .unconfigured
         lastEvent = quickConfigured ? "就绪" : "尚未导入 VPN 配置"
         // 延迟非关键任务，避免阻塞启动首帧
@@ -319,34 +393,68 @@ final class VPNManager: ObservableObject {
     ///   - username: 鉴权用户名
     ///   - password: 鉴权密码（可传 nil 表示保持原有）
     func saveConfig(ovpnData: Data, fileName: String, username: String, password: String?) {
-        do {
-            try ovpnData.write(to: URL(fileURLWithPath: configPath), options: .atomic)
-        } catch {
-            lastEvent = "保存配置失败：\(error.localizedDescription)"
+        // 多配置路径：新建档案
+        if store.loadAll().isEmpty && FileManager.default.fileExists(atPath: "\(configDir)/config.ovpn") && !FileManager.default.fileExists(atPath: store.ovpnPath(for: "tmp")) {
+            // 已在 init 迁移，此分支保留兼容
+        }
+        // 若处于编辑模式（已有 activeProfile），更新该档案而非新建
+        if let active = activeProfile, profiles.contains(where: { $0.id == active.id }), username == active.username || password == nil {
+            // 编辑：更新 ovpn 与用户名
+            try? ovpnData.write(to: URL(fileURLWithPath: store.ovpnPath(for: active.id)), options: .atomic)
+            var updated = active
+            updated.fileName = fileName
+            updated.name = (fileName as NSString).deletingPathExtension
+            updated.username = username
+            updated.serverAddress = VPNProfile.parseServerAddress(from: String(data: ovpnData, encoding: .utf8) ?? "")
+            updated.updatedAt = Date()
+            store.update(updated)
+            if let pwd = password {
+                if !Keychain.savePassword(pwd, account: store.keychainAccount(for: active.id)) {
+                    lastEvent = "凭据保存失败（钥匙串）"
+                    return
+                }
+            }
+            refreshProfiles()
+            status = .disconnected
+            lastEvent = "配置已更新：\(fileName)"
+            loadLogTail()
             return
         }
-        UserDefaults.standard.set(fileName, forKey: kProfileName)
-        self.username = username
-        if let password {
-            if !Keychain.savePassword(password, account: keychainAccount) {
+        let p = store.add(ovpnData: ovpnData, fileName: fileName, username: username)
+        if let pwd = password {
+            if !Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id)) {
                 lastEvent = "凭据保存失败（钥匙串）"
                 return
             }
+        } else if let legacyPwd = Keychain.loadPassword(account: legacyKeychainAccount) {
+            _ = Keychain.savePassword(legacyPwd, account: store.keychainAccount(for: p.id))
         }
-        invalidateIsConfiguredCache()
-        invalidateServerAddressCache()
-        // 未配置 → 变为已断开（可连接）
-        if !isConfigured || status == .unconfigured {
-            status = .disconnected
-        }
+        refreshProfiles()
+        // 兼容旧 UserDefaults
+        UserDefaults.standard.set(fileName, forKey: kProfileName)
+        UserDefaults.standard.set(username, forKey: kUsername)
+        status = .disconnected
         lastEvent = "配置已保存：\(fileName)"
         loadLogTail()
     }
 
-    /// 清除配置（回未配置态）
+    /// 更新当前档案的凭据（用户名/密码）而不新建
+    func updateActiveCredentials(username: String, password: String?) {
+        guard var p = activeProfile else { return }
+        p.username = username
+        p.updatedAt = Date()
+        store.update(p)
+        UserDefaults.standard.set(username, forKey: kUsername)
+        if let pwd = password, !pwd.isEmpty {
+            _ = Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id))
+        }
+        refreshProfiles()
+        lastEvent = "凭据已更新"
+    }
+
+    /// 清除配置（多配置：删除当前档案；兼容旧单文件）
     func clearConfig() {
         let fm = FileManager.default
-        // 先断开
         manualDisconnect = true
         desiredConnected = false
         _ = sendManagementCommand("signal SIGTERM\n")
@@ -354,16 +462,21 @@ final class VPNManager: ObservableObject {
         process = nil
         cleanupAuthFile()
 
-        try? fm.removeItem(atPath: configPath)
+        if let p = activeProfile {
+            store.remove(id: p.id)
+        } else {
+            try? fm.removeItem(atPath: configPath)
+            Keychain.deletePassword(account: keychainAccount)
+        }
         try? fm.removeItem(atPath: logFile)
-        Keychain.deletePassword(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: kProfileName)
         UserDefaults.standard.removeObject(forKey: kUsername)
+        refreshProfiles()
         invalidateIsConfiguredCache()
         invalidateServerAddressCache()
 
-        status = .unconfigured
-        lastEvent = "配置已清除"
+        status = isConfigured ? .disconnected : .unconfigured
+        lastEvent = profiles.isEmpty ? "配置已清除" : "已删除当前配置"
         loadLogTail()
     }
 
@@ -517,9 +630,9 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// 生成认证文件（用户名\n密码，0600）
+    /// 生成认证文件（用户名\n密码，0600，多配置感知）
     private func writeAuthFile() -> Bool {
-        guard let password = Keychain.loadPassword(account: keychainAccount) else { return false }
+        guard let password = Keychain.loadPassword(account: activeKeychainAccount) else { return false }
         let content = "\(username)\n\(password)\n"
         let url = URL(fileURLWithPath: authFile)
         do {

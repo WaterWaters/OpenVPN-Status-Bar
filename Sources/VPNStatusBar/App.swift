@@ -6,7 +6,25 @@ import VPNStatusBarCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installSignalHandler()
+        // 通知授权（用户可在设置关闭）
+        if UserDefaults.standard.object(forKey: "notifyEnabled") == nil {
+            UserDefaults.standard.set(true, forKey: "notifyEnabled")
+        }
+        NotificationService.requestAuthorizationIfNeeded()
+        // 睡眠唤醒：唤醒后若期望连接则重连
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didSleep), name: NSWorkspace.screensDidSleepNotification, object: nil)
     }
+
+    @objc private func didWake() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let m = VPNManager.shared
+            if m.desiredConnectedPublic && !m.status.isConnected {
+                m.connect()
+            }
+        }
+    }
+    @objc private func didSleep() {}
 
     func applicationWillTerminate(_ notification: Notification) {
         VPNManager.shared.shutdown()

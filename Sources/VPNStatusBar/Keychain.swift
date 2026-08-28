@@ -7,8 +7,9 @@ import Security
 
 enum Keychain {
 
-    /// 钥匙串服务标识（对应 app bundle id）
-    static let service = "local.zhongtang.vpnstatusbar"
+    /// 钥匙串服务标识（对应 app bundle id，v0.2 起泛化为 io.vpnstatusbar）
+    static let service = "io.vpnstatusbar"
+    static let legacyService = "local.zhongtang.vpnstatusbar"
 
     /// 进程内缓存，避免启动期频繁 IPC
     private static var cache: [String: String?] = [:]
@@ -47,11 +48,34 @@ enum Keychain {
         return ok
     }
 
-    /// 读取密码（带进程内缓存）
+    /// 读取密码（带进程内缓存，兼容旧 service 自动迁移）
     static func loadPassword(account: String) -> String? {
         if hasCached(account: account) {
             return cachedPassword(account: account) ?? nil
         }
+        let pwd = loadPasswordDirect(service: service, account: account)
+        if pwd != nil {
+            cacheQueue.sync { cache[account] = pwd }
+            return pwd
+        }
+        // 兼容旧版本迁移
+        if let legacyPwd = loadPasswordDirect(service: legacyService, account: account) {
+            // 迁移至新 service
+            _ = savePassword(legacyPwd, account: account)
+            // 清理旧条目
+            let q: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: legacyService,
+                kSecAttrAccount as String: account,
+            ]
+            SecItemDelete(q as CFDictionary)
+            return legacyPwd
+        }
+        cacheQueue.sync { cache[account] = nil }
+        return nil
+    }
+
+    private static func loadPasswordDirect(service: String, account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -61,13 +85,8 @@ enum Keychain {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            cacheQueue.sync { cache[account] = nil }
-            return nil
-        }
-        let pwd = String(data: data, encoding: .utf8)
-        cacheQueue.sync { cache[account] = pwd }
-        return pwd
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     /// 删除密码
