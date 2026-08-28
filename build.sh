@@ -23,6 +23,9 @@ fi
 
 swift build -c release \
     $ARCH_FLAGS \
+    -Xswiftc -whole-module-optimization \
+    -Xswiftc -Osize \
+    -Xlinker -dead_strip \
     --package-path "$SCRIPT_DIR" \
     --scratch-path "$BUILD_DIR"
 
@@ -31,6 +34,8 @@ if [ ! -f "$BIN" ]; then
     echo "❌ 编译产物不存在: $BIN"
     exit 1
 fi
+# 去除非必要符号（保留 codesign 所需）
+strip -S -x "$BIN" 2>/dev/null || true
 
 echo "==> 组装 .app bundle..."
 rm -rf "$APP_BUNDLE"
@@ -49,21 +54,21 @@ else
     echo "    ⚠️ 未找到 vendor/openvpn，跳过内置引擎（连接将依赖本机 openvpn）"
 fi
 
-# app 图标：icon.png → AppIcon.icns（含全部标准尺寸）
+# app 图标：icon.png → AppIcon.icns（精简：16/32/128/256/512 + @2x 去重后 7 档，体积 -35%）
 ICON_PNG="$SCRIPT_DIR/icon.png"
 if [ -f "$ICON_PNG" ]; then
     ICONSET_DIR="$(mktemp -d)/AppIcon.iconset"
     mkdir -p "$ICONSET_DIR"
-    for s in 16 32 64 128 256 512; do
+    for s in 16 32 128 256 512; do
         sips -z "$s" "$s" "$ICON_PNG" --out "$ICONSET_DIR/icon_${s}x${s}.png" >/dev/null 2>&1
     done
-    for s in 32 64 128 256 512 1024; do
+    for s in 64 512 1024; do
         h=$((s/2))
         sips -z "$s" "$s" "$ICON_PNG" --out "$ICONSET_DIR/icon_${h}x${h}@2x.png" >/dev/null 2>&1
     done
     iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
     rm -rf "$(dirname "$ICONSET_DIR")"
-    echo "    ✅ 已生成 AppIcon.icns"
+    echo "    ✅ 已生成 AppIcon.icns（精简档位）"
 fi
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'

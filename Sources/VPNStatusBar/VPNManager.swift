@@ -15,14 +15,15 @@ final class VPNManager: ObservableObject {
 
     // MARK: - 配置存储（v2：应用内导入，不依赖本地文件）
 
-    /// 数据目录：~/Library/Application Support/VPNStatusBar/
-    private var configDir: String {
+    /// 数据目录：~/Library/Application Support/VPNStatusBar/（懒加载，启动期不建目录）
+    private lazy var _configDir: String = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         let dir = base.appendingPathComponent("VPNStatusBar", isDirectory: true).path
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
+    private var configDir: String { _configDir }
 
     /// 导入的 ovpn 配置（复制存储，原文件可删除）
     var configPath: String { "\(configDir)/config.ovpn" }
@@ -31,6 +32,11 @@ final class VPNManager: ObservableObject {
     /// 日志文件（openvpn 输出，供面板展示）
     var logFile: String { "\(configDir)/vpn.log" }
     private let routePattern = "10.8/16"
+
+    // 启动期缓存
+    private var cachedIsConfigured: Bool?
+    private var cachedServerAddress: String?
+    private var serverAddressLoaded = false
 
     /// 内置引擎稳定路径（首启同步到此，sudoers 免密指向此处 —— 移动/升级 app 不失效）
     private let engineStablePath = "/usr/local/vpnstatusbar/openvpn"
@@ -46,10 +52,23 @@ final class VPNManager: ObservableObject {
     private let kProfileName = "vpn.profileName"
     private let kUsername = "vpn.username"
 
-    /// 是否已导入配置（config.ovpn + 凭据齐全）
+    /// 是否已导入配置（带缓存，避免启动期频繁 Keychain IPC）
     var isConfigured: Bool {
-        FileManager.default.fileExists(atPath: configPath)
-            && Keychain.loadPassword(account: keychainAccount) != nil
+        if let cached = cachedIsConfigured { return cached }
+        let exists = FileManager.default.fileExists(atPath: configPath)
+        // 启动期快速路径：文件不存在直接返回，避免 Keychain 调用
+        guard exists else {
+            cachedIsConfigured = false
+            return false
+        }
+        let hasPwd = Keychain.loadPassword(account: keychainAccount) != nil
+        let result = exists && hasPwd
+        cachedIsConfigured = result
+        return result
+    }
+
+    private func invalidateIsConfiguredCache() {
+        cachedIsConfigured = nil
     }
 
     /// 配置文件名（导入时记录原始文件名，用于元信息行显示）
@@ -63,16 +82,31 @@ final class VPNManager: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: kUsername) }
     }
 
-    /// 服务器地址（从 config.ovpn 的 remote 行解析，供设置页展示）
+    /// 服务器地址（从 config.ovpn 的 remote 行解析，供设置页展示，带缓存）
     var serverAddress: String {
-        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return "—" }
+        if serverAddressLoaded, let cached = cachedServerAddress { return cached }
+        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            cachedServerAddress = "—"
+            serverAddressLoaded = true
+            return "—"
+        }
         for line in content.split(separator: "\n") {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("remote ") {
-                return t.dropFirst(7).trimmingCharacters(in: .whitespaces)
+                let addr = t.dropFirst(7).trimmingCharacters(in: .whitespaces)
+                cachedServerAddress = addr
+                serverAddressLoaded = true
+                return addr
             }
         }
+        cachedServerAddress = "—"
+        serverAddressLoaded = true
         return "—"
+    }
+
+    private func invalidateServerAddressCache() {
+        cachedServerAddress = nil
+        serverAddressLoaded = false
     }
 
     // MARK: - 启动脚本（参数化，优先使用 app 内置副本）
@@ -122,8 +156,10 @@ final class VPNManager: ObservableObject {
     @Published private(set) var engineAuth: EngineAuth = .checking
     /// 下一次自动重连的触发时刻（重连中用于倒计时显示）
     @Published private(set) var retryDeadline: Date?
-    /// 秒级时钟节拍：连接中 / 重连中每秒发布一次，驱动时长与倒计时刷新（不用 TimelineView，避免菜单更新递归）
+    /// 秒级时钟：保留兼容（P1 后由 TickProvider 驱动，避免全量刷新）
     @Published private(set) var clock: Date = Date()
+    /// 是否需要时钟 tick（供 TickProvider 过滤）
+    var needsTick: Bool { status.isConnected || retryDeadline != nil }
 
     /// 用户意图：是否期望保持连接
     private var desiredConnected = false
@@ -143,17 +179,42 @@ final class VPNManager: ObservableObject {
     private var isWaitingRetry = false
 
     private init() {
-        // 初始状态：已配置 → 已断开；未配置 → 未配置
-        status = isConfigured ? .disconnected : .unconfigured
-        if isConfigured {
-            lastEvent = "就绪"
-        } else {
-            lastEvent = "尚未导入 VPN 配置"
-        }
-        loadLogTail()
+        // 轻量初始：仅文件存在性快速判断，不触发 Keychain IPC；日志/授权异步
+        let quickConfigured = FileManager.default.fileExists(atPath: configPath)
+        status = quickConfigured ? .disconnected : .unconfigured
+        lastEvent = quickConfigured ? "就绪" : "尚未导入 VPN 配置"
+        // 延迟非关键任务，避免阻塞启动首帧
         startMonitoring()
         startClock()
-        refreshEngineAuth()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let tail = self.readLogTailSync()
+            DispatchQueue.main.async { self.logTail = tail }
+        }
+        // 引擎授权延迟 300ms，缓存 60s 内结果
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.refreshEngineAuth()
+        }
+        // 后台校验真实 isConfigured，修正状态（文件存在但 Keychain 缺失的边界）
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let real = self.isConfigured
+            DispatchQueue.main.async {
+                if !real && self.status == .disconnected && quickConfigured {
+                    self.status = .unconfigured
+                    self.lastEvent = "尚未导入 VPN 配置"
+                }
+            }
+        }
+    }
+
+    private func readLogTailSync() -> String {
+        guard let content = try? String(contentsOfFile: logFile, encoding: .utf8) else {
+            return "（暂无日志）"
+        }
+        let lines = content.split(separator: "\n")
+        let tail = lines.suffix(4).joined(separator: "\n")
+        return tail.isEmpty ? "（暂无日志）" : String(tail)
     }
 
     // MARK: - VPN 引擎授权（v3：内置 openvpn + 一次性免密授权）
@@ -272,6 +333,8 @@ final class VPNManager: ObservableObject {
                 return
             }
         }
+        invalidateIsConfiguredCache()
+        invalidateServerAddressCache()
         // 未配置 → 变为已断开（可连接）
         if !isConfigured || status == .unconfigured {
             status = .disconnected
@@ -296,6 +359,8 @@ final class VPNManager: ObservableObject {
         Keychain.deletePassword(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: kProfileName)
         UserDefaults.standard.removeObject(forKey: kUsername)
+        invalidateIsConfiguredCache()
+        invalidateServerAddressCache()
 
         status = .unconfigured
         lastEvent = "配置已清除"
@@ -593,25 +658,50 @@ final class VPNManager: ObservableObject {
         RunLoop.main.add(statusTimer!, forMode: .common)
     }
 
-    /// 秒级时钟：仅连接中 / 重连中发布 tick（驱动时长走表与重连倒计时）
+    /// 秒级时钟：P1 改为代理到 TickProvider，保留兼容发布以便旧订阅过渡
     private func startClock() {
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            if self.status.isConnected || self.retryDeadline != nil {
-                self.clock = Date()
+            guard self.needsTick else { return }
+            let now = Date()
+            self.clock = now
+            DispatchQueue.main.async {
+                TickProvider.shared.setNow(now)
             }
         }
         RunLoop.main.add(clockTimer!, forMode: .common)
     }
 
     private func refreshState() {
-        let hasRoute = checkTunnelRoute()
+        // 快照主线程状态，避免跨线程竞态
+        let desired = desiredConnected
+        let currentStatus = status
         let procRunning = process?.isRunning ?? false
+        // 仅当需要探测路由时才开后台线程（避免每次都起线程）
+        let needsRouteCheck = desired && procRunning
+        guard needsRouteCheck else {
+            // 无需路由探测，直接在主线程收敛状态
+            if !desired {
+                if currentStatus.isConnected || (currentStatus != .disconnected && currentStatus != .unconfigured) {
+                    DispatchQueue.main.async { [weak self] in self?.status = .disconnected }
+                }
+            } else if !procRunning {
+                DispatchQueue.main.async { [weak self] in self?.handleProcessExit() }
+            }
+            return
+        }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let hasRoute = self?.checkTunnelRoute() ?? false
+            DispatchQueue.main.async { [weak self] in
+                self?.applyRefresh(hasRoute: hasRoute, procRunning: procRunning, desired: desired, currentStatus: currentStatus)
+            }
+        }
+    }
 
-        if desiredConnected {
+    private func applyRefresh(hasRoute: Bool, procRunning: Bool, desired: Bool, currentStatus: VPNStatus) {
+        if desired {
             if procRunning && hasRoute {
                 if status != .connected {
-                    // 重连成功：重置退避
                     retryDelay = 5
                     retryDeadline = nil
                     status = .connected
@@ -620,12 +710,10 @@ final class VPNManager: ObservableObject {
                     loadLogTail()
                 }
             } else if procRunning && !hasRoute {
-                // 进程在但路由未就绪 → 仍处于握手阶段
                 if status != .connecting && !status.isConnected {
                     status = .connecting
                 }
             } else if !procRunning {
-                // 进程不在了（可能恰好错过 terminationHandler 或路由被清）
                 handleProcessExit()
             }
         } else {

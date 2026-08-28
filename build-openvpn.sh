@@ -37,7 +37,8 @@ LZ4_PREFIX="$PREFIX/lz4"
 
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
-CFLAGS_EXT="-Os -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+CFLAGS_EXT="-Os -ffunction-sections -fdata-sections -flto -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+LDFLAGS_EXT="-Wl,-dead_strip -Wl,-x"
 
 mkdir -p "$SRC" "$CACHE" "$OPENSSL_PREFIX" "$LZO_PREFIX" "$LZ4_PREFIX" "$(dirname "$OUT_BIN")"
 
@@ -68,7 +69,7 @@ build_openssl(){
     ./Configure darwin64-arm64-cc no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX" \
         -DOPENSSL_NO_ASM >/dev/null 2>&1 || \
     ./Configure darwin64-arm64-cc no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX"
-    make -j"$JOBS" CFLAGS="$CFLAGS_EXT" >/dev/null
+    make -j"$JOBS" CFLAGS="$CFLAGS_EXT" LDFLAGS="$LDFLAGS_EXT" >/dev/null
     make install_sw >/dev/null
   )
   echo "    ✅ openssl .a: $(ls "$OPENSSL_PREFIX/lib"/*.a | tr '\n' ' ')"
@@ -84,7 +85,8 @@ build_lzo(){
   (
     cd "$SRC/lzo"
     ./configure --prefix="$LZO_PREFIX" --disable-shared --enable-static \
-        CFLAGS="$CFLAGS_EXT" >/dev/null
+        --disable-dependency-tracking \
+        CFLAGS="$CFLAGS_EXT" LDFLAGS="$LDFLAGS_EXT" >/dev/null
     make -j"$JOBS" >/dev/null
     make install >/dev/null
   )
@@ -100,7 +102,7 @@ build_lz4(){
   tar -xzf "$CACHE/lz4-${LZ4_VER}.tar.gz" -C "$SRC/lz4" --strip-components=1
   (
     cd "$SRC/lz4"
-    make -C lib -j"$JOBS" BUILD_SHARED=no CFLAGS="$CFLAGS_EXT" liblz4.a >/dev/null
+    make -C lib -j"$JOBS" BUILD_SHARED=no CFLAGS="$CFLAGS_EXT" LDFLAGS="$LDFLAGS_EXT" liblz4.a >/dev/null
     make -C lib install BUILD_SHARED=no PREFIX="$LZ4_PREFIX" >/dev/null
   )
   echo "    ✅ liblz4.a"
@@ -123,20 +125,22 @@ build_openvpn(){
         --disable-plugins \
         --disable-pkcs11 \
         --disable-debug \
+        --disable-nls \
+        --disable-dependency-tracking \
         --disable-silent-rules \
         --with-crypto-library=openssl \
         --with-ssl="$OPENSSL_PREFIX" \
         --with-lzo-headers="$LZO_PREFIX/include" --with-lzo-lib="$LZO_PREFIX/lib" \
         CPPFLAGS="-I$OPENSSL_PREFIX/include -I$LZO_PREFIX/include -I$LZ4_PREFIX/include" \
-        LDFLAGS="-L$OPENSSL_PREFIX/lib -L$LZO_PREFIX/lib -L$LZ4_PREFIX/lib" \
+        LDFLAGS="-L$OPENSSL_PREFIX/lib -L$LZO_PREFIX/lib -L$LZ4_PREFIX/lib $LDFLAGS_EXT" \
         CFLAGS="$CFLAGS_EXT" \
         >/dev/null
     make -j"$JOBS" >/dev/null
     mkdir -p "$(dirname "$OUT_BIN")"
     cp -f src/openvpn/openvpn "$OUT_BIN"
   )
-  # 精简 + 固定架构与部署目标
-  strip -x "$OUT_BIN"
+  # 精简 + 固定架构与部署目标（dead_strip + 去调试符号）
+  strip -S -x "$OUT_BIN" 2>/dev/null || strip -x "$OUT_BIN"
   echo "    ✅ 产物: $OUT_BIN"
 }
 

@@ -60,10 +60,10 @@ struct VPNStatusBarApp: App {
 }
 
 // MARK: - 菜单栏图标（随状态着色，连接中/重连中呼吸）
+// 动画隔离到内部子视图，避免父视图 invalidata 扩散
 
 struct StatusBarIcon: View {
     let status: VPNStatus
-    @State private var pulse = false
 
     private var color: Color {
         switch status {
@@ -74,15 +74,26 @@ struct StatusBarIcon: View {
     }
 
     var body: some View {
-        Image(systemName: status.symbolName)
+        if status.isBusy {
+            PulsingIcon(symbol: status.symbolName, color: color)
+        } else {
+            Image(systemName: status.symbolName)
+                .foregroundStyle(color)
+        }
+    }
+}
+
+private struct PulsingIcon: View {
+    let symbol: String
+    let color: Color
+    @State private var pulse = false
+
+    var body: some View {
+        Image(systemName: symbol)
             .foregroundStyle(color)
-            .opacity(status.isBusy ? (pulse ? 0.35 : 1) : 1)
-            .animation(
-                status.isBusy
-                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                    : .default,
-                value: pulse
-            )
+            .opacity(pulse ? 0.35 : 1)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
             .onAppear { pulse = true }
+            .transaction { $0.disablesAnimations = false }
     }
 }

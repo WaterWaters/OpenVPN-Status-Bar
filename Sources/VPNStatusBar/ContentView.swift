@@ -87,7 +87,6 @@ private struct Hairline: View {
 
 private struct StatusHeader: View {
     @EnvironmentObject private var vpn: VPNManager
-    @State private var pulse = false
 
     private var isBusy: Bool { vpn.status.isBusy }
 
@@ -118,13 +117,6 @@ private struct StatusHeader: View {
         }
     }
 
-    private var durationText: String {
-        switch vpn.status {
-        case .connected: return vpn.formattedDuration()
-        default: return "--:--:--"
-        }
-    }
-
     private var durationColor: Color {
         switch vpn.status {
         case .connected: return Design.ok
@@ -133,26 +125,8 @@ private struct StatusHeader: View {
         }
     }
 
-    private var metaText: String {
-        switch vpn.status {
-        case .unconfigured:
-            return "导入 VPN 配置后开始"
-        case .connected:
-            var s = "VPNStatusBar · \(vpn.profileName) · 隧道 10.8.0.0/16"
-            if vpn.reconnectCount > 0 { s += " · 已重连 \(vpn.reconnectCount) 次" }
-            return s
-        case .reconnecting:
-            return "\(vpn.retryRemaining) 秒后自动重试"
-        case .connecting:
-            return "正在建立隧道…"
-        case .disconnected:
-            return "VPNStatusBar · \(vpn.profileName)"
-        }
-    }
-
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            // 图标瓷砖
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(tile.bg)
@@ -163,34 +137,97 @@ private struct StatusHeader: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                // 标题行：状态点 + 标题 + 时长
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(dotColor)
-                        .frame(width: 7, height: 7)
-                        .opacity(isBusy ? (pulse ? 0.3 : 1) : 1)
-                        .onAppear {
-                            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                                pulse = true
-                            }
-                        }
+                    PulsingDot(color: dotColor, isBusy: isBusy)
                     Text(titleText)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Design.ink)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    Text(durationText)
-                        .font(.system(size: 12, design: .monospaced).monospacedDigit())
-                        .foregroundStyle(durationColor)
+                    DurationText(status: vpn.status, connectedAt: vpn.connectedAt, color: durationColor)
                 }
-                // 元信息行
-                Text(metaText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Design.ink2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                MetaTextView(
+                    status: vpn.status,
+                    profileName: vpn.profileName,
+                    reconnectCount: vpn.reconnectCount,
+                    retryDeadline: vpn.retryDeadline
+                )
             }
         }
+    }
+}
+
+private struct PulsingDot: View {
+    let color: Color
+    let isBusy: Bool
+    @State private var pulse = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .opacity(isBusy ? (pulse ? 0.3 : 1) : 1)
+            .animation(isBusy ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: pulse)
+            .onAppear { if isBusy { pulse = true } }
+            .onChange(of: isBusy) { busy in
+                if busy { pulse = true } else { pulse = false }
+            }
+    }
+}
+
+private struct DurationText: View {
+    let status: VPNStatus
+    let connectedAt: Date?
+    let color: Color
+    @ObservedObject private var tick = TickProvider.shared
+
+    var body: some View {
+        let _ = tick.now // 订阅 tick，仅此子视图刷新
+        let text: String = {
+            guard case .connected = status, let start = connectedAt else { return "--:--:--" }
+            let elapsed = Int(tick.now.timeIntervalSince(start))
+            let h = elapsed / 3600
+            let m = (elapsed % 3600) / 60
+            let s = elapsed % 60
+            return String(format: "%02d:%02d:%02d", h, m, s)
+        }()
+        Text(text)
+            .font(.system(size: 12, design: .monospaced).monospacedDigit())
+            .foregroundStyle(color)
+    }
+}
+
+private struct MetaTextView: View {
+    let status: VPNStatus
+    let profileName: String
+    let reconnectCount: Int
+    let retryDeadline: Date?
+    @ObservedObject private var tick = TickProvider.shared
+
+    var body: some View {
+        let _ = tick.now
+        let text: String = {
+            switch status {
+            case .unconfigured: return "导入 VPN 配置后开始"
+            case .connected:
+                var s = "VPNStatusBar · \(profileName) · 隧道 10.8.0.0/16"
+                if reconnectCount > 0 { s += " · 已重连 \(reconnectCount) 次" }
+                return s
+            case .reconnecting:
+                let remaining: Int = {
+                    guard let d = retryDeadline else { return 0 }
+                    return max(0, Int(d.timeIntervalSince(tick.now).rounded(.up)))
+                }()
+                return "\(remaining) 秒后自动重试"
+            case .connecting: return "正在建立隧道…"
+            case .disconnected: return "VPNStatusBar · \(profileName)"
+            }
+        }()
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Design.ink2)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 }
 
@@ -388,10 +425,10 @@ private struct EngineWarnRow: View {
 private struct DiagnosticsSection: View {
     @EnvironmentObject private var vpn: VPNManager
     @State private var expanded = true
+    @State private var cachedLines: [String] = []
 
-    /// 日志按行拆分（最多 6 行，超长行中点截断，避免撑爆面板/显示不全）
-    private var logLines: [String] {
-        let lines = vpn.logTail.split(separator: "\n").map(String.init).prefix(6)
+    private func makeLines(from tail: String) -> [String] {
+        let lines = tail.split(separator: "\n").map(String.init).prefix(6)
         return lines.map { line in
             if line.count <= 56 { return line }
             return String(line.prefix(53)) + "…"
@@ -431,13 +468,13 @@ private struct DiagnosticsSection: View {
 
             if expanded {
                 VStack(alignment: .leading, spacing: 2) {
-                    if logLines.isEmpty {
+                    if cachedLines.isEmpty {
                         Text("（暂无日志）")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Design.ink3)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
-                        ForEach(Array(logLines.enumerated()), id: \.offset) { _, line in
+                        ForEach(Array(cachedLines.enumerated()), id: \.offset) { _, line in
                             Text(line)
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(Design.ink2)
@@ -459,6 +496,10 @@ private struct DiagnosticsSection: View {
                         .strokeBorder(Design.rule, lineWidth: 1)
                 )
             }
+        }
+        .onAppear { cachedLines = makeLines(from: vpn.logTail) }
+        .onChange(of: vpn.logTail) { tail in
+            cachedLines = makeLines(from: tail)
         }
         .onChange(of: vpn.status) { newStatus in
             // 重连 / 连接中自动展开日志
