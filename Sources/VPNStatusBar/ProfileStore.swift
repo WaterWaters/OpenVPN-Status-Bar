@@ -15,7 +15,7 @@ final class ProfileStore {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         let dir = base.appendingPathComponent("VPNStatusBar", isDirectory: true).path
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        PrivateFile.ensureDirectory(dir)
         return dir
     }()
 

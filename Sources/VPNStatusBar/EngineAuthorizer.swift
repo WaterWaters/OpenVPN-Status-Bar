@@ -76,6 +76,9 @@ final class EngineAuthorizer {
 
     /// 以管理员权限完成：创建稳定目录 → 安装内置引擎 → 写入 /etc/sudoers.d 免密规则。
     /// 会弹一次系统管理员密码；用户取消返回 false。
+    ///
+    /// sudoers 的写法很关键：先写临时文件、`chmod 440`、`visudo -c` 校验通过后再原子替换。
+    /// 直接覆盖正式文件时，一条语法错误的规则会让整个 sudo 不可用（用户会被锁在管理员权限之外）。
     func install() -> Bool {
         guard let bundled = bundledPath,
               FileManager.default.fileExists(atPath: bundled) else {
@@ -88,18 +91,29 @@ final class EngineAuthorizer {
             return false
         }
         let user = NSUserName()
+        // 用户名要嵌进 sudoers 规则：只接受常规短用户名，杜绝引号/换行破坏规则语法
+        guard user.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else {
+            log.error("用户名含非常规字符，拒绝写入 sudoers：\(user, privacy: .public)")
+            return false
+        }
         // 免密规则只放行包装脚本；它内部固定引擎路径、只接受 validate/start/stop/status 四个动作，
         // 并对配置做指令白名单校验（见 Support/vpn-run.sh 的文件头）
         let rule = "\(user) ALL=(root) NOPASSWD: \(wrapperPath)\n"
         let shell = """
-        mkdir -p /usr/local/vpnstatusbar
+        set -e
+        mkdir -p /etc/sudoers.d
+        /usr/bin/install -d -m 755 -o root -g wheel /usr/local/vpnstatusbar
         /bin/cp -f '\(bundled)' /usr/local/vpnstatusbar/openvpn
         /bin/chmod 755 /usr/local/vpnstatusbar/openvpn
         /bin/cp -f '\(bundledWrapper)' /usr/local/vpnstatusbar/vpn-run.sh
         /bin/chmod 755 /usr/local/vpnstatusbar/vpn-run.sh
         /usr/sbin/chown root:wheel /usr/local/vpnstatusbar/openvpn /usr/local/vpnstatusbar/vpn-run.sh
-        printf '%s' '\(rule)' > /etc/sudoers.d/vpnstatusbar
-        /bin/chmod 440 /etc/sudoers.d/vpnstatusbar
+        TMP=/etc/sudoers.d/.vpnstatusbar.tmp
+        trap 'rm -f "$TMP"' EXIT
+        printf '%s' '\(rule)' > "$TMP"
+        /bin/chmod 440 "$TMP"
+        /usr/sbin/visudo -cf "$TMP"
+        /bin/mv -f "$TMP" /etc/sudoers.d/vpnstatusbar
         """
         let escaped = shell
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -109,12 +123,21 @@ final class EngineAuthorizer {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         proc.arguments = ["-e", osa]
         proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+        // 捕获 stderr：授权失败（尤其 visudo 拒绝）时要能说明原因，而不是只回一个 false
+        let errPipe = Pipe()
+        proc.standardError = errPipe
         do {
             try proc.run()
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
             let ok = proc.terminationStatus == 0
-            log.notice("引擎安装\(ok ? "成功" : "失败/被取消", privacy: .public)")
+            if ok {
+                log.notice("引擎安装成功")
+            } else {
+                let reason = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                log.error("引擎安装失败（退出码 \(proc.terminationStatus, privacy: .public)）：\(reason, privacy: .public)")
+            }
             return ok
         } catch {
             log.error("osascript 启动失败：\(error.localizedDescription, privacy: .public)")

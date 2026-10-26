@@ -24,11 +24,12 @@ final class VPNManager: ObservableObject {
     // MARK: - 配置存储（v2：应用内导入，不依赖本地文件）
 
     /// 数据目录：~/Library/Application Support/VPNStatusBar/（懒加载，启动期不建目录）
+    /// 权限 0700：里面是日志（含内网主机名）与临时凭据文件。
     private lazy var _configDir: String = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         let dir = base.appendingPathComponent("VPNStatusBar", isDirectory: true).path
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        PrivateFile.ensureDirectory(dir)
         return dir
     }()
     private var configDir: String { _configDir }
@@ -708,8 +709,7 @@ final class VPNManager: ObservableObject {
         // management 接口密码：每次连接随机生成、只落在 0600 文件里（同机其他用户无法对隧道发 SIGTERM）。
         // 写失败就不带密码（退回旧行为），不影响连接本身。
         let mgmtPassword = Self.randomPassword()
-        let hasMgmtPassword = (try? mgmtPassword.write(toFile: mgmtPasswordFile, atomically: true, encoding: .utf8)) != nil
-            && (try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mgmtPasswordFile)) != nil
+        let hasMgmtPassword = PrivateFile.write(mgmtPassword, to: mgmtPasswordFile)
 
         // 日志：超限轮转已在 prepareAndStart 的后台块里做过；本次启动会写一行会话分隔记录（runner 负责写入），
         // 日志是追加模式，断线后仍能回看之前几次发生了什么
@@ -766,15 +766,7 @@ final class VPNManager: ObservableObject {
     /// 生成认证文件（用户名\n密码，0600，多配置感知）
     private func writeAuthFile() -> Bool {
         guard let password = Keychain.loadPassword(account: activeKeychainAccount) else { return false }
-        let content = "\(username)\n\(password)\n"
-        let url = URL(fileURLWithPath: authFile)
-        do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: authFile)
-            return true
-        } catch {
-            return false
-        }
+        return PrivateFile.write("\(username)\n\(password)\n", to: authFile)
     }
 
     private func terminateProcess() {
