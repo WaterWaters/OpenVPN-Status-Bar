@@ -52,7 +52,6 @@ enum PanelMetrics {
     /// 因此完全不会发作（不会错位、不会闪烁，也不会留下吞点击的透明区域）。
     static let height:  CGFloat = 360
     static let padding: CGFloat = 12
-    static let gap:     CGFloat = 8
 }
 
 // MARK: - 字号 / 圆角令牌
@@ -71,9 +70,8 @@ extension Design {
         static let label: CGFloat = 12
         /// 主要文字：按钮、状态标题（原 13）
         static let body: CGFloat = 13
-        /// 图标：14 / 15 / 16 三档
+        /// 图标：14 / 16
         static let icon: CGFloat = 14
-        static let iconMedium: CGFloat = 15
         static let iconLarge: CGFloat = 16
         /// 完成态大图标（原 22）
         static let iconHero: CGFloat = 22

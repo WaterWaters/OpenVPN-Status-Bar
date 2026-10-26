@@ -35,78 +35,41 @@ final class EngineAuthorizer {
         let arch: String?
         /// 仍存在「NOPASSWD 指向引擎二进制」的 v3 时代旧规则 → 需要重新授权切到包装脚本
         let legacyOwnRule: Bool
+        /// v2 时代遗留的、指向别处 openvpn 的免密规则（非空时设置页提示清理）
+        let legacyForeignRule: String?
     }
 
-    /// 真·免密探测：以 `sudo -n` 直接运行引擎 `--version`，退出码 0 才算免密可用。
+    /// 真·免密探测：以 `sudo -n` 直接运行包装脚本的 `status`（即 `openvpn --version`），退出码 0 才算免密可用。
     ///
     /// 不能用 `sudo -n -l <路径>` 判断：admin 组用户的 sudo 策略里有 `(ALL) ALL`（需密码），
-    /// `-l` 只回答“是否有权运行”，对任何命令都返回 0 —— 会把“未授权”误判成“已授权”，
-    /// 直到连接时才报 “sudo: a password is required”。
+    /// `-l` 只回答"是否有权运行"，对任何命令都返回 0 —— 会把"未授权"误判成"已授权"，
+    /// 直到连接时才报 "sudo: a password is required"。
     /// 也不用 `-k`（会顺手清掉用户在终端里的 sudo 时间戳）：缓存命中时能跑通本身就说明
-    /// “此刻免密可用”，不构成有害的假阳性；真失效时这里会失败，下面的策略列表再给出原因。
-    /// 顺带取回引擎真实版本 / 架构，供设置页展示。
+    /// "此刻免密可用"，不构成有害的假阳性；真失效时这里会失败，下面的策略列表再给出原因。
+    ///
+    /// `sudo -n -l` 只读列一次，两条遗留规则判断都复用它的输出（原来要拉 3–4 个进程）。
     func probe() -> ProbeResult {
-        let legacyOwn = hasLegacyOwnRule()
+        let listing = sudoPolicyListing() ?? ""
+        let legacyOwn = SudoPolicy.hasNoPasswdRule(for: stablePath, in: listing)
+        let foreign = SudoPolicy.firstForeignOpenVPNRule(in: listing, excluding: [stablePath, wrapperPath])
+
         // 包装脚本没装 = 还没授权过（或只有 v3 旧规则）
         guard FileManager.default.isExecutableFile(atPath: wrapperPath) else {
-            let state: EngineAuth = FileManager.default.isExecutableFile(atPath: stablePath) ? .unauthorized : .unauthorized
-            return ProbeResult(state: state, version: nil, arch: nil, legacyOwnRule: legacyOwn)
+            return ProbeResult(state: .unauthorized, version: nil, arch: nil,
+                               legacyOwnRule: legacyOwn, legacyForeignRule: foreign)
         }
         // 真·免密 + 引擎版本：让包装脚本打印 `openvpn --version`（见 vpn-run.sh 的 status 动作）
         let (status, output) = runCapturing("/usr/bin/sudo", ["-n", wrapperPath, "status"])
         if status == 0 {
-            let parsed = Self.parseVersion(output)
-            return ProbeResult(state: .authorized, version: parsed.version, arch: parsed.arch, legacyOwnRule: legacyOwn)
+            let parsed = OpenVPNSignature.parse(output)
+            return ProbeResult(state: .authorized, version: parsed.version, arch: parsed.arch,
+                               legacyOwnRule: legacyOwn, legacyForeignRule: foreign)
         }
         // 失败时用策略列表区分原因（列出策略不需要密码，也不依赖 sudo 的本地化错误文案）：
         // 规则在但跑不起来 → 引擎/脚本异常（该走"修复"）；规则不在 → 未授权（该走"授权"）
-        let listing = sudoPolicyListing() ?? ""
-        let rulePresent = listing.split(whereSeparator: \.isNewline).contains { line in
-            let text = line.trimmingCharacters(in: .whitespaces)
-            return text.contains("NOPASSWD") && text.hasSuffix(wrapperPath)
-        }
-        return ProbeResult(state: rulePresent ? .broken : .unauthorized, version: nil, arch: nil, legacyOwnRule: legacyOwn)
-    }
-
-    /// 是否存在「NOPASSWD 指向引擎二进制」的旧规则（v3 时代；允许任意参数，是这次要堵掉的提权口）。
-    /// 只提示，不自动改 sudoers：让用户从设置页重新授权，用新规则覆盖同一个文件。
-    func hasLegacyOwnRule() -> Bool {
-        guard let listing = sudoPolicyListing() else { return false }
-        return listing.split(whereSeparator: \.isNewline).contains { line in
-            let text = line.trimmingCharacters(in: .whitespaces)
-            return text.contains("NOPASSWD") && text.hasSuffix(stablePath)
-        }
-    }
-
-    /// 检测 v2 时代遗留的免密规则（例：`/opt/homebrew/sbin/openvpn` —— Homebrew 目录用户可写，
-    /// 那条 NOPASSWD 等于把免密 root 执行权指向一个任何进程都能改写的二进制）。
-    /// 用 `sudo -n -l` 只读列出策略；**不自动删**：它可能写在 /etc/sudoers 里，程序化改写风险太高，
-    /// 交由用户用 sudo visudo 处理（设置页给出提示与路径）。
-    func legacyAuthRule() -> String? {
-        guard let listing = sudoPolicyListing() else { return nil }
-        for line in listing.split(whereSeparator: \.isNewline) {
-            let text = line.trimmingCharacters(in: .whitespaces)
-            guard text.contains("NOPASSWD"), text.contains("openvpn") else { continue }
-            guard let path = text.split(separator: ":").last.map({ $0.trimmingCharacters(in: .whitespaces) }),
-                  path.hasPrefix("/"), path != stablePath, path != wrapperPath else { continue }
-            return path
-        }
-        return nil
-    }
-
-    /// 解析 `OpenVPN 2.6.14 aarch64-apple-darwin25.5.0 [SSL (OpenSSL)] …`
-    static func parseVersion(_ output: String) -> (version: String?, arch: String?) {
-        for line in output.split(whereSeparator: \.isNewline) {
-            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard parts.count >= 3, parts[0] == "OpenVPN" else { continue }
-            let target = String(parts[2])
-            let arch: String
-            if target.hasPrefix("aarch64") { arch = "arm64" }
-            else if target.hasPrefix("x86_64") { arch = "x86_64" }
-            else { arch = target.split(separator: "-").first.map(String.init) ?? target }
-            return (String(parts[1]), arch)
-        }
-        return (nil, nil)
+        let rulePresent = SudoPolicy.hasNoPasswdRule(for: wrapperPath, in: listing)
+        return ProbeResult(state: rulePresent ? .broken : .unauthorized, version: nil, arch: nil,
+                           legacyOwnRule: legacyOwn, legacyForeignRule: foreign)
     }
 
     // MARK: - 安装

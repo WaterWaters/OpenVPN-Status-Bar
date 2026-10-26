@@ -105,8 +105,4 @@ enum Keychain {
         }
         return ok
     }
-
-    static func invalidateCache(account: String) {
-        cacheQueue.sync { cache[account] = nil }
-    }
 }

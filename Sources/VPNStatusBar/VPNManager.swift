@@ -69,8 +69,6 @@ final class VPNManager: ObservableObject {
 
     // 启动期缓存
     private var cachedIsConfigured: Bool?
-    private var cachedServerAddress: String?
-    private var serverAddressLoaded = false
 
     /// 引擎稳定路径（授权时同步到此 —— 移动/升级 app 都不失效）
     private let engineStablePath = "/usr/local/vpnstatusbar/openvpn"
@@ -153,34 +151,6 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// 服务器地址（多配置优先，带缓存）
-    var serverAddress: String {
-        if let p = activeProfile { return p.serverAddress }
-        if serverAddressLoaded, let cached = cachedServerAddress { return cached }
-        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
-            cachedServerAddress = "—"
-            serverAddressLoaded = true
-            return "—"
-        }
-        for line in content.split(separator: "\n") {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("remote ") {
-                let addr = t.dropFirst(7).trimmingCharacters(in: .whitespaces)
-                cachedServerAddress = addr
-                serverAddressLoaded = true
-                return addr
-            }
-        }
-        cachedServerAddress = "—"
-        serverAddressLoaded = true
-        return "—"
-    }
-
-    private func invalidateServerAddressCache() {
-        cachedServerAddress = nil
-        serverAddressLoaded = false
-    }
-
     // MARK: - 启动脚本（参数化，优先使用 app 内置副本）
 
     private lazy var runnerScript: String = {
@@ -218,6 +188,8 @@ final class VPNManager: ObservableObject {
                 }
                 // 状态类别变了：看门狗间隔/启停跟着变（busy 5s / 其余 30s / 空闲断开停表）
                 updateWatchdog()
+                // 秒级时钟只在"已连接 / 重连中"才有意义，其余状态别白醒
+                updateTicker()
             }
         }
     }
@@ -287,8 +259,9 @@ final class VPNManager: ObservableObject {
     /// 起点时间用于给收敛兜底一个宽限期（超过就当卡死处理）
     private var isStarting = false
     private var startingAt: Date?
-    /// 授权探测进行中（避免重复点击时并发探测）
-    private var isAwaitingEngineProbe = false
+    /// 授权探测进行中（同一时刻只拉一组 sudo；期间到来的请求排队复用同一个结果）
+    private var isProbing = false
+    private var probeWaiters: [(EngineAuthorizer.ProbeResult) -> Void] = []
     /// 引擎授权（探测/安装/规则）：与系统权限打交道的事都收在那里
     private lazy var engine = EngineAuthorizer(stablePath: engineStablePath,
                                                wrapperPath: engineWrapperPath,
@@ -300,7 +273,6 @@ final class VPNManager: ObservableObject {
     func refreshProfiles() {
         profiles = store.loadAll()
         cachedIsConfigured = nil
-        invalidateServerAddressCache()
     }
 
     /// 切换档案：已连接时先断开再切，并按原意图自动连到新档案。
@@ -356,8 +328,8 @@ final class VPNManager: ObservableObject {
         PanelVisibility.shared.$isVisible
             .removeDuplicates()
             .sink { [weak self] visible in
-                TickProvider.shared.setActive(visible)
                 self?.mgmt.setBytecountInterval(visible ? 1 : 0)
+                self?.updateTicker()
             }
             .store(in: &cancellables)
         // 首次日志读取（后台读文件、主线程发布，不挡启动）
@@ -422,19 +394,40 @@ final class VPNManager: ObservableObject {
 
     /// 触发引擎授权检测（异步，完成后发布 engineAuth / 版本 / 架构 / 遗留规则）
     func refreshEngineAuth() {
-        engineAuth = .checking
+        probeEngine { _ in }
+    }
+
+    /// 探测（合并）：同一时刻只有一个探测在飞，期间的请求排进 waiter，
+    /// 结果一次发布、一次回调。避免"启动探测"与"点连接时补探测"并发拉起两组 sudo。
+    private func probeEngine(_ completion: @escaping (EngineAuthorizer.ProbeResult) -> Void) {
+        probeWaiters.append(completion)
+        guard !isProbing else { return }
+        isProbing = true
+        if engineAuth != .checking { engineAuth = .checking }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let probe = self.engine.probe()
-            let legacy = self.engine.legacyAuthRule()
+            let result = self.engine.probe()
             DispatchQueue.main.async {
-                self.engineAuth = probe.state
-                self.engineVersion = probe.version
-                self.engineArch = probe.arch
-                self.legacyAuthRule = legacy
-                self.needsReauthorization = probe.legacyOwnRule
-                if probe.state == .authorized { self.lastEvent = L10n.tr("event.engineAuthorized") }
+                self.isProbing = false
+                self.applyProbe(result)
+                let waiters = self.probeWaiters
+                self.probeWaiters.removeAll()
+                waiters.forEach { $0(result) }
             }
+        }
+    }
+
+    /// 发布探测结果（先发布、再唤醒 waiter：waiter 里可能立刻调用 connect()）
+    private func applyProbe(_ result: EngineAuthorizer.ProbeResult) {
+        let previous = engineAuth
+        engineAuth = result.state
+        engineVersion = result.version
+        engineArch = result.arch
+        legacyAuthRule = result.legacyForeignRule
+        needsReauthorization = result.legacyOwnRule
+        // 只在"刚检测完 / 刚授权完"时覆盖事件行，避免把连接过程里的事件顶掉
+        if result.state == .authorized, previous == .checking || previous == .authorizing {
+            lastEvent = L10n.tr("event.engineAuthorized")
         }
     }
 
@@ -536,7 +529,6 @@ final class VPNManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: kUsername)
         refreshProfiles()
         invalidateIsConfiguredCache()
-        invalidateServerAddressCache()
 
         status = isConfigured ? .disconnected : .unconfigured
         lastEvent = profiles.isEmpty ? L10n.tr("event.profileCleared") : L10n.tr("event.profileDeleted")
@@ -586,34 +578,22 @@ final class VPNManager: ObservableObject {
 
     /// 授权探测未完成时：等结果，已授权就继续这次连接意图
     private func awaitEngineAuthThenConnect() {
-        guard !isAwaitingEngineProbe else {
-            lastEvent = L10n.tr("event.engineChecking")
-            return
-        }
-        isAwaitingEngineProbe = true
         lastEvent = L10n.tr("event.engineChecking")
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        probeEngine { [weak self] result in
             guard let self = self else { return }
-            let probe = self.engine.probe()
-            DispatchQueue.main.async {
-                self.isAwaitingEngineProbe = false
-                self.engineAuth = probe.state
-                self.engineVersion = probe.version
-                self.engineArch = probe.arch
-                self.needsReauthorization = probe.legacyOwnRule
-                switch probe.state {
-                case .authorized:
-                    self.connect()
-                case .unauthorized:
-                    self.lastEvent = L10n.tr("event.engineUnauthorized")
-                    self.status = .disconnected
-                case .broken:
-                    self.lastEvent = L10n.tr("event.engineBroken")
-                    self.status = .disconnected
-                default:
-                    self.lastEvent = L10n.tr("event.engineChecking")
-                    self.status = .disconnected
-                }
+            switch result.state {
+            case .authorized:
+                // 并发点击/已有意图时只连一次
+                if !self.desiredConnected { self.connect() }
+            case .unauthorized:
+                self.lastEvent = L10n.tr("event.engineUnauthorized")
+                self.status = .disconnected
+            case .broken:
+                self.lastEvent = L10n.tr("event.engineBroken")
+                self.status = .disconnected
+            default:
+                self.lastEvent = L10n.tr("event.engineChecking")
+                self.status = .disconnected
             }
         }
     }
@@ -1058,6 +1038,12 @@ final class VPNManager: ObservableObject {
         statusTimer = timer
     }
 
+    /// 秒级时钟按需启停：面板可见 **且** 当前状态确实有时长/倒计时可显示。
+    /// 面板开着但已断开时不再有 1 Hz 唤醒（那正是菜单栏 app 最常见的状态）。
+    private func updateTicker() {
+        TickProvider.shared.setActive(PanelVisibility.shared.isVisible && status.needsClock)
+    }
+
     private func refreshState() {
         // 快照主线程状态，避免跨线程竞态
         let desired = desiredConnected
@@ -1210,10 +1196,4 @@ final class VPNManager: ObservableObject {
     }
 
     // MARK: - 格式化
-
-    /// 距离下次自动重连的剩余秒数（倒计时显示）
-    var retryRemaining: Int {
-        guard let deadline = retryDeadline else { return 0 }
-        return max(0, Int(deadline.timeIntervalSinceNow.rounded(.up)))
-    }
 }

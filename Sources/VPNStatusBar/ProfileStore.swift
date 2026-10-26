@@ -9,13 +9,17 @@ final class ProfileStore {
     private let fm = FileManager.default
     private let kActiveId = "vpn.activeProfileId"
 
-    private var baseDir: String {
+    /// 数据目录：**只解析/创建一次**（原来每次访问都 `createDirectory`，
+    /// 而 `ovpnPath`/`configPath` 会频繁走到这里 —— 面板每次重绘都在做无谓的系统调用）
+    private lazy var baseDirectory: String = {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         let dir = base.appendingPathComponent("VPNStatusBar", isDirectory: true).path
         try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
+
+    private var baseDir: String { baseDirectory }
 
     private var profilesDir: String { "\(baseDir)/profiles" }
     private var indexPath: String { "\(baseDir)/profiles.json" }

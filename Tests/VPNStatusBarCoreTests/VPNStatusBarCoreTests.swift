@@ -27,6 +27,21 @@ final class VPNStatusTests: XCTestCase {
         XCTAssertFalse(VPNStatus.connected.isBusy)
         XCTAssertFalse(VPNStatus.disconnected.isBusy)
     }
+
+    /// 秒级时钟只在"有时长/倒计时可显示"的状态下需要：其余状态开着面板也不该有 1 Hz 唤醒
+    func testNeedsClock() {
+        XCTAssertTrue(VPNStatus.connected.needsClock)
+        XCTAssertTrue(VPNStatus.reconnecting(attempt: 1).needsClock)
+        XCTAssertFalse(VPNStatus.connecting.needsClock)
+        XCTAssertFalse(VPNStatus.disconnected.needsClock)
+        XCTAssertFalse(VPNStatus.unconfigured.needsClock)
+    }
+
+    func testIsReconnecting() {
+        XCTAssertTrue(VPNStatus.reconnecting(attempt: 1).isReconnecting)
+        XCTAssertFalse(VPNStatus.connecting.isReconnecting)
+        XCTAssertFalse(VPNStatus.connected.isReconnecting)
+    }
 }
 
 final class EngineAuthTests: XCTestCase {

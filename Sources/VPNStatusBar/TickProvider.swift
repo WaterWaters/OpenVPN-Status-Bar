@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import os
 
 /// 秒级时钟源：只给"需要每秒刷新"的子视图用（连接时长、重连倒计时）。
 ///
@@ -11,11 +12,12 @@ final class TickProvider: ObservableObject {
 
     @Published private(set) var now: Date = Date()
 
+    private let log = Logger(subsystem: "io.vpnstatusbar", category: "tick")
     private var timer: Timer?
 
     private init() {}
 
-    /// 面板可见性变化时调用
+    /// 面板可见性 + 状态变化时调用
     func setActive(_ active: Bool) {
         if active {
             setNow(Date())   // 立刻校正：面板刚打开时时长/倒计时必须是对的
@@ -27,7 +29,9 @@ final class TickProvider: ObservableObject {
             timer.tolerance = 0.1
             RunLoop.main.add(timer, forMode: .common)
             self.timer = timer
+            log.debug("ticker 启动")
         } else {
+            if timer != nil { log.debug("ticker 停止") }
             timer?.invalidate()
             timer = nil
         }

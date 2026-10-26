@@ -1,4 +1,4 @@
-import SwiftUI
+import Foundation
 
 /// VPN 连接状态（纯逻辑，可单元测试）
 public enum VPNStatus: Equatable, Sendable {
@@ -27,14 +27,6 @@ public enum VPNStatus: Equatable, Sendable {
         }
     }
 
-    public var color: Color {
-        switch self {
-        case .connected: return .green
-        case .connecting, .reconnecting: return .orange
-        case .disconnected, .unconfigured: return .gray
-        }
-    }
-
     public var isConnected: Bool {
         if case .connected = self { return true }
         return false
@@ -46,4 +38,13 @@ public enum VPNStatus: Equatable, Sendable {
         if case .reconnecting = self { return true }
         return false
     }
+
+    public var isReconnecting: Bool {
+        if case .reconnecting = self { return true }
+        return false
+    }
+
+    /// 是否需要秒级时钟：只有"已连接"（时长）与"重连中"（倒计时）需要。
+    /// `connecting` 只是静态提示文案；空闲断开更不该有 1 Hz 唤醒。
+    public var needsClock: Bool { isConnected || isReconnecting }
 }
