@@ -3,7 +3,8 @@ import VPNStatusBarCore
 
 /// 多配置存储（文件 + 索引），迁移兼容旧单文件 config.ovpn
 final class ProfileStore {
-    static let shared = ProfileStore()
+    /// 并发约定：只在主线程访问（VPNManager 的读写都在主线程；后台只做 Keychain IPC）
+    nonisolated(unsafe) static let shared = ProfileStore()
 
     private let fm = FileManager.default
     private let kActiveId = "vpn.activeProfileId"
@@ -22,14 +23,27 @@ final class ProfileStore {
 
     // MARK: - CRUD
 
+    /// 进程内缓存：profiles.json 只在首次与写操作时落盘，其余都是内存查找。
+    /// （原来每次 `loadAll()` 都读盘 + JSON 解码，而 `activeProfile()` 一次最多调 3 次，
+    ///  配置卡每行又都会调它 —— 面板每重绘一次就是 N×3 次磁盘 I/O。）
+    private var cachedList: [VPNProfile]?
+
     func loadAll() -> [VPNProfile] {
+        if let cachedList { return cachedList }
         migrateIfNeeded()
+        let list = readIndexFromDisk()
+        cachedList = list
+        return list
+    }
+
+    private func readIndexFromDisk() -> [VPNProfile] {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: indexPath)),
               let list = try? JSONDecoder().decode([VPNProfile].self, from: data) else { return [] }
         return list
     }
 
     func saveAll(_ list: [VPNProfile]) {
+        cachedList = list      // 先更新内存：写盘失败也不至于让界面回退到旧列表
         try? fm.createDirectory(atPath: profilesDir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(list) {
             try? data.write(to: URL(fileURLWithPath: indexPath), options: .atomic)
@@ -37,6 +51,10 @@ final class ProfileStore {
     }
 
     func ovpnPath(for id: String) -> String { "\(profilesDir)/\(id).ovpn" }
+
+    /// 多档案索引是否已建立（`profiles.json` 是否存在）。
+    /// 一旦为 true，就说明已经走过 v2 的多档案迁移，不该再回退到 legacy 的 `config.ovpn`。
+    var hasIndex: Bool { fm.fileExists(atPath: indexPath) }
 
     func activeId() -> String? { UserDefaults.standard.string(forKey: kActiveId) }
 
@@ -105,7 +123,8 @@ final class ProfileStore {
     }
 
     func activeProfile() -> VPNProfile? {
-        guard let id = activeId() else { return loadAll().first }
-        return loadAll().first(where: { $0.id == id }) ?? loadAll().first
+        let list = loadAll()
+        guard let id = activeId() else { return list.first }
+        return list.first(where: { $0.id == id }) ?? list.first
     }
 }

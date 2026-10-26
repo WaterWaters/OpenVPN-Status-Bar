@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import AppKit
 import SwiftUI
+import os
 import VPNStatusBarCore
 
 /// VPN 管理器：负责配置读写、连接/断开、隧道状态监控、断线自动重连
@@ -10,8 +11,15 @@ import VPNStatusBarCore
 ///   连接时由 app 生成临时 auth 文件，经参数化 runner 启动 openvpn。
 /// v2.1：openvpn 环境检测（路径探测 + sudo 免密授权校验），
 ///   未就绪时给出明确原因与修复命令（适配同事机器 brew 前缀/软链差异）。
+/// 并发约定（写在这里是为了让后续改动有据可依）：
+/// - 所有 `@Published`、定时器、进程句柄、本类的各种缓存**只在主线程读写**；
+/// - 后台队列只做 I/O（Keychain IPC、sudo 探测、socket、读日志文件），算完的结果一律
+///   `DispatchQueue.main.async` 回主线程再落到状态上；
+/// - 少数确实要被两边访问的东西各自带锁：`Keychain`（cacheQueue）、`MgmtClient`（私有串行队列）、`mgmtLock`。
+/// 改动时请保持这个形状：**不要**在后台闭包里直接改本类的属性。
 final class VPNManager: ObservableObject {
-    static let shared = VPNManager()
+    /// 同上：只在主线程访问
+    nonisolated(unsafe) static let shared = VPNManager()
 
     // MARK: - 配置存储（v2：应用内导入，不依赖本地文件）
 
@@ -25,16 +33,28 @@ final class VPNManager: ObservableObject {
     }()
     private var configDir: String { _configDir }
 
-    /// 导入的 ovpn 配置（多配置：activeProfile 对应文件；兼容 legacy 单文件）
+    /// legacy（v2 之前单文件时代）的配置路径：**仅在多档案索引还没建立时**才有效。
+    /// 迁移时会保留 `config.ovpn` 以防回滚，但如果删光档案后还回退到它，
+    /// 界面就会"复活"一份用户以为已删除的旧配置（并用旧凭据去连旧服务器）。
+    private var legacyConfigPath: String? {
+        store.hasIndex ? nil : "\(configDir)/config.ovpn"
+    }
+
+    /// 导入的 ovpn 配置（多配置：activeProfile 对应文件）
     var configPath: String {
         if let p = store.activeProfile() { return store.ovpnPath(for: p.id) }
-        return "\(configDir)/config.ovpn"
+        return legacyConfigPath ?? ""
     }
     /// 连接时临时生成的认证文件（0600，断开即删）
     private var authFile: String { "\(configDir)/.auth.tmp" }
+    /// 本次连接的 management 接口密码文件（0600，断开即删；只传路径，密码本身不进 argv）
+    private var mgmtPasswordFile: String { "\(configDir)/.mgmt.pw" }
     /// 日志文件（openvpn 输出，供面板展示）
     var logFile: String { "\(configDir)/vpn.log" }
-    private let routePattern = "10.8/16"
+    /// 状态机日志：log show --predicate 'subsystem == "io.vpnstatusbar"' --last 10m
+    private let stateLog = Logger(subsystem: "io.vpnstatusbar", category: "vpnstate")
+    /// management 接口串行锁：状态轮询与断开用的 SIGTERM 互斥（接口同时只服务一个客户端）
+    private let mgmtLock = NSLock()
 
     // 多配置
     let store = ProfileStore.shared
@@ -52,8 +72,26 @@ final class VPNManager: ObservableObject {
     private var cachedServerAddress: String?
     private var serverAddressLoaded = false
 
-    /// 内置引擎稳定路径（首启同步到此，sudoers 免密指向此处 —— 移动/升级 app 不失效）
+    /// 引擎稳定路径（授权时同步到此 —— 移动/升级 app 都不失效）
     private let engineStablePath = "/usr/local/vpnstatusbar/openvpn"
+    /// 启动包装脚本的稳定路径：sudoers 只放行它（v4 起，权限面收严；见 Support/vpn-run.sh）
+    private let engineWrapperPath = "/usr/local/vpnstatusbar/vpn-run.sh"
+
+    /// 解析随 app 分发的支撑脚本：优先 app bundle 的 Resources；
+    /// 开发态（swift run）向上找仓库里的 Support/ —— 产物布局变过多次，别再按固定层级推算
+    private static func resolveSupportScript(named name: String) -> String? {
+        if let inBundle = Bundle.main.resourceURL?.appendingPathComponent(name).path,
+           FileManager.default.fileExists(atPath: inBundle) {
+            return inBundle
+        }
+        var dir = Bundle.main.bundleURL
+        for _ in 0..<6 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent("Support/\(name)").path
+            if FileManager.default.fileExists(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
     /// app 内置的自包含 openvpn（build-openvpn.sh 静态编译，build.sh 打进 Contents/Resources）
     private var bundledEnginePath: String? {
         Bundle.main.resourceURL?.appendingPathComponent("openvpn").path
@@ -77,15 +115,15 @@ final class VPNManager: ObservableObject {
             cachedIsConfigured = result
             return result
         }
-        let exists = FileManager.default.fileExists(atPath: configPath)
-        guard exists else {
+        // 只有单文件时代的机器才允许走 legacy 回退（见 legacyConfigPath 的说明）
+        guard let legacy = legacyConfigPath,
+              FileManager.default.fileExists(atPath: legacy) else {
             cachedIsConfigured = false
             return false
         }
         let hasPwd = Keychain.loadPassword(account: keychainAccount) != nil
-        let result = exists && hasPwd
-        cachedIsConfigured = result
-        return result
+        cachedIsConfigured = hasPwd
+        return hasPwd
     }
 
     private func invalidateIsConfiguredCache() {
@@ -146,37 +184,40 @@ final class VPNManager: ObservableObject {
     // MARK: - 启动脚本（参数化，优先使用 app 内置副本）
 
     private lazy var runnerScript: String = {
-        // 1. app bundle 内副本（build.sh 打包进 Contents/Resources，自包含）
-        if let bundled = Bundle.main.resourceURL?
-            .appendingPathComponent("vpn-runner.sh").path,
-           FileManager.default.fileExists(atPath: bundled) {
-            return bundled
-        }
-        // 2. 通用回退：app 旁常见位置（已去中唐硬编码）
-        let bundle = Bundle.main.bundleURL
+        if let found = Self.resolveSupportScript(named: "vpn-runner.sh") { return found }
+        // 最后兜底：app 旁的常见位置（老布局）
+        let parent = Bundle.main.bundleURL.deletingLastPathComponent()
         let candidates = [
-            bundle.deletingLastPathComponent().appendingPathComponent("vpn-runner.sh").path,
-            bundle.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("vpn-runner.sh").path,
+            parent.appendingPathComponent("vpn-runner.sh").path,
+            parent.deletingLastPathComponent().appendingPathComponent("vpn-runner.sh").path,
         ]
-        for c in candidates where FileManager.default.fileExists(atPath: c) {
-            return c
-        }
+        for c in candidates where FileManager.default.fileExists(atPath: c) { return c }
         return candidates[0]
     }()
+
+    /// app 内置的包装脚本（授权时安装到 engineWrapperPath）
+    private lazy var bundledWrapperPath: String? = Self.resolveSupportScript(named: "vpn-run.sh")
 
     // MARK: - 发布状态
     @Published var status: VPNStatus = .unconfigured {
         didSet {
             if oldValue != status {
+                // 本次 connecting 起点：面板据此在超过阈值后给出「取消连接」入口
+                if case .connecting = status { connectingSince = Date() } else { connectingSince = nil }
+                stateLog.notice("status=\(String(describing: self.status), privacy: .public) from=\(String(describing: oldValue), privacy: .public)")
                 switch status {
                 case .connected:
                     NotificationService.notifyConnected(profile: profileName)
                 case .disconnected:
                     if oldValue.isConnected || oldValue.isBusy { NotificationService.notifyDisconnected(profile: profileName) }
-                case .reconnecting(let attempt) where attempt >= 3:
+                case .reconnecting(let attempt) where attempt == 3:
+                    // 只在本轮断线的第 3 次尝试提醒一次：attempt 每轮重连自增、间隔封顶 60s，
+                    // 若按 >= 3 判断，通宵断网会累积上百条通知
                     NotificationService.notifyReconnectFailed(profile: profileName, attempt: attempt)
                 default: break
                 }
+                // 状态类别变了：看门狗间隔/启停跟着变（busy 5s / 其余 30s / 空闲断开停表）
+                updateWatchdog()
             }
         }
     }
@@ -197,32 +238,62 @@ final class VPNManager: ObservableObject {
     @Published var connectedAt: Date?
     @Published var lastEvent: String = "Ready"
     @Published var logTail: String = ""
-    var desiredConnectedPublic: Bool { desiredConnected }
     /// VPN 引擎授权状态（连接前置校验 + 设置页展示）
     @Published private(set) var engineAuth: EngineAuth = .checking
+    /// 引擎真实版本 / 架构（设置页展示真值，不再写死）
+    @Published private(set) var engineVersion: String?
+    @Published private(set) var engineArch: String?
+    /// 检测到的 v2 时代遗留免密规则（如 /opt/homebrew/sbin/openvpn），非空时设置页提示清理
+    @Published private(set) var legacyAuthRule: String?
+    /// 仍是 v3 时代的旧规则（NOPASSWD 直指引擎二进制）→ 提示重新授权一次以切到包装脚本
+    @Published private(set) var needsReauthorization = false
+    /// 隧道本端地址（management `state` 报告的真值，连接后可用）
+    @Published private(set) var tunnelLocalAddress: String?
+    /// 实时流量（management `bytecount` 推送；面板可见时才订阅）。
+    /// 单独一个 ObservableObject：1 Hz 的推送只让真正显示它的视图刷新，
+    /// 不再每秒把整块面板 + 菜单栏 label 一起重绘（挂在 `@Published` 上会全量失效）。
+    let trafficStore = TrafficStore()
+    /// management 常驻连接是否处于推送中（用于面板显示与兜底轮询判断）
+    @Published private(set) var mgmtStreaming = false
     /// 下一次自动重连的触发时刻（重连中用于倒计时显示）
     @Published private(set) var retryDeadline: Date?
-    /// 秒级时钟：保留兼容（P1 后由 TickProvider 驱动，避免全量刷新）
-    @Published private(set) var clock: Date = Date()
-    /// 是否需要时钟 tick（供 TickProvider 过滤）
-    var needsTick: Bool { status.isConnected || retryDeadline != nil }
+    /// 本轮 connecting 的起始时刻（面板据此决定何时给出「取消连接」）
+    @Published private(set) var connectingSince: Date?
 
     /// 用户意图：是否期望保持连接
     private var desiredConnected = false
     /// 是否为手动断开（避免触发自动重连）
     private var manualDisconnect = false
 
+    /// management 常驻连接：openvpn 主动推送状态/流量，替代每 2 秒轮询
+    private let mgmt = MgmtClient()
+    /// 面板可见性订阅（1 秒时钟与流量推送按需开关）
+    private var cancellables = Set<AnyCancellable>()
+    /// 上一次流量采样（用于算速率）
+    private var lastTrafficSample: TrafficSample?
+
     private var process: Process?
     private var statusTimer: Timer?
-    private var clockTimer: Timer?
     private var retryTimer: Timer?
     private var retryDelay: TimeInterval = 5
     private let maxRetryDelay: TimeInterval = 60
-    private let monitorInterval: TimeInterval = 2.0
     /// 防重入：terminationHandler 与定时器同时触发
     private var isHandlingExit = false
-    /// 是否已处于等待重连状态（防止 refreshState 反复调度导致重连被无限推迟）
+    /// 是否已处于等待重连状态（防止看门狗反复调度导致重连被无限推迟）
     private var isWaitingRetry = false
+    /// 启动序列进行中（残留清理 + 拉起进程），期间不要把“进程还没起来”当成异常退出；
+    /// 起点时间用于给收敛兜底一个宽限期（超过就当卡死处理）
+    private var isStarting = false
+    private var startingAt: Date?
+    /// 授权探测进行中（避免重复点击时并发探测）
+    private var isAwaitingEngineProbe = false
+    /// 引擎授权（探测/安装/规则）：与系统权限打交道的事都收在那里
+    private lazy var engine = EngineAuthorizer(stablePath: engineStablePath,
+                                               wrapperPath: engineWrapperPath,
+                                               bundledPath: bundledEnginePath,
+                                               bundledWrapperPath: bundledWrapperPath)
+    /// 本轮断线区间内的重连次数：只用于状态文案与通知去重（成功连接后归零）
+    private var outageAttempt = 0
 
     func refreshProfiles() {
         profiles = store.loadAll()
@@ -230,17 +301,27 @@ final class VPNManager: ObservableObject {
         invalidateServerAddressCache()
     }
 
+    /// 切换档案：已连接时先断开再切，并按原意图自动连到新档案。
+    /// 不这么做会出现“UI 显示新档案、隧道其实还是旧档案”的错位（2s 后状态还会翻回已连接、时长被重置）。
     func switchProfile(id: String) {
+        guard store.activeId() != id else { return }
+        let keepConnected = desiredConnected || status.isConnected || status.isBusy
+        if keepConnected { disconnect() }
         store.setActiveId(id)
         refreshProfiles()
         // 切换后收敛状态
         status = isConfigured ? .disconnected : .unconfigured
         lastEvent = L10n.tr("event.profileSwitched", profileName)
         loadLogTail()
+        if keepConnected { connect() }
     }
 
+    /// 删除档案：删的是当前档案且隧道在用 → 先断开再删（配置/凭据删了隧道还在是最坏的一种状态）
     func deleteProfile(id: String) {
         let wasActive = store.activeId() == id
+        if wasActive && (desiredConnected || status.isConnected || status.isBusy) {
+            disconnect()
+        }
         store.remove(id: id)
         refreshProfiles()
         if wasActive {
@@ -258,22 +339,37 @@ final class VPNManager: ObservableObject {
         status = quickConfigured ? .disconnected : .unconfigured
         lastEvent = quickConfigured ? L10n.tr("event.ready") : L10n.tr("event.noProfile")
         // 延迟非关键任务，避免阻塞启动首帧
-        startMonitoring()
-        startClock()
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            let tail = self.readLogTailSync()
-            DispatchQueue.main.async { self.logTail = tail }
+        updateWatchdog()
+        // management 常驻连接：推送状态/流量（回调在主线程）
+        mgmt.onEvent = { [weak self] event in self?.handleManagementEvent(event) }
+        mgmt.onStateChange = { [weak self] state in
+            self?.mgmtStreaming = (state == .streaming)
         }
+        // 网络路径变化（换 Wi-Fi / 唤醒）→ 立刻收敛，不再傻等退避倒计时
+        NetworkMonitor.shared.onPathChange = { [weak self] in self?.handleNetworkPathChange() }
+        // 面板可见性：只有人在看面板时才需要 1 秒时钟与流量推送；关掉面板两者归零
+        PanelVisibility.shared.$isVisible
+            .removeDuplicates()
+            .sink { [weak self] visible in
+                TickProvider.shared.setActive(visible)
+                self?.mgmt.setBytecountInterval(visible ? 1 : 0)
+            }
+            .store(in: &cancellables)
+        // 首次日志读取（后台读文件、主线程发布，不挡启动）
+        loadLogTail()
         // 引擎授权延迟 300ms，缓存 60s 内结果
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.refreshEngineAuth()
         }
-        // 后台校验真实 isConfigured，修正状态（文件存在但 Keychain 缺失的边界）
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let real = self.isConfigured
+        // 后台校验真实 isConfigured（文件存在但 Keychain 缺失的边界）。
+        // 后台只负责把 Keychain 的值取进缓存（真正的 IPC 成本在那里），判断与缓存写入都回主线程做 ——
+        // 早期版本在后台闭包里直接读 `isConfigured`，会跨线程读写本类缓存（严格并发标出的真实竞态）。
+        let accountForCheck = activeKeychainAccount
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = Keychain.loadPassword(account: accountForCheck)
             DispatchQueue.main.async {
+                self.cachedIsConfigured = nil          // 让 getter 重新判断（此时 Keychain 已命中缓存）
+                let real = self.isConfigured
                 if !real && self.status == .disconnected && quickConfigured {
                     self.status = .unconfigured
                     self.lastEvent = L10n.tr("event.noProfile")
@@ -282,53 +378,58 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    private func readLogTailSync() -> String {
-        guard let content = try? String(contentsOfFile: logFile, encoding: .utf8) else {
-            return "（暂无日志）"
+    /// 面板展示用的日志窗口（只读文件末尾，不再整读最多 512 KB）
+    private static let displayTailBytes = 16 * 1024
+    /// 判定凭据错误用的窗口：比展示窗口宽，够覆盖一次正常会话；真超出时回落整文件读
+    private static let verdictTailBytes = 64 * 1024
+
+    /// 本次会话的日志：日志为追加模式，按会话分隔行切片，
+    /// 历史会话里的 AUTH_FAILED 不能触发本次的“停止重连”判定。
+    /// 先只读末尾窗口（命中分隔行即可判定）；窗口被截断且没有分隔行时才整文件读一次（罕见）。
+    private func currentLogText() -> String {
+        let tail = LogFile.tail(atPath: logFile, maxBytes: Self.verdictTailBytes)
+        if let session = OpenVPNLog.currentSessionFromTail(tail.text, tailIsWholeFile: tail.isWholeFile) {
+            return session
         }
-        let lines = content.split(separator: "\n")
-        let tail = lines.suffix(4).joined(separator: "\n")
-        return tail.isEmpty ? "（暂无日志）" : String(tail)
+        return LogFile.whole(atPath: logFile) ?? tail.text
     }
 
-    // MARK: - VPN 引擎授权（v3：内置 openvpn + 一次性免密授权）
+    /// 日志超过 maxBytes 时保留末尾一半（追加模式下的自保，避免文件无限增长）
+    /// 注：按 Character 截取，保证切出来的内容仍是合法 UTF-8（按字节切会切断多字节字符）。
+    /// 静态且只碰文件：调用点在后台队列上（见 prepareAndStart），不在主线程做整文件读写。
+    private static func rotateLogIfNeeded(atPath path: String) {
+        let maxBytes = 512 * 1024
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int, size > maxBytes,
+              let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        let kept = String(content.suffix(maxBytes / 2))
+        try? kept.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+    }
 
-    /// 触发引擎授权检测（异步，完成后发布 engineAuth）
+    /// 日志末尾 4 行（面板展示用）；文件缺失或为空时给本地化占位文案。
+    /// 纯字符串处理，可后台执行；文件读取由调用方负责。
+    private static func logTailText(from tail: LogFile.Tail) -> String {
+        let lines = tail.text.split(separator: "\n").suffix(4).joined(separator: "\n")
+        return lines.isEmpty ? L10n.tr("log.empty") : String(lines)
+    }
+
+    // MARK: - VPN 引擎授权（具体动作见 EngineAuthorizer）
+
+    /// 触发引擎授权检测（异步，完成后发布 engineAuth / 版本 / 架构 / 遗留规则）
     func refreshEngineAuth() {
         engineAuth = .checking
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let fm = FileManager.default
-            let binExists = fm.isExecutableFile(atPath: self.engineStablePath)
-            let sudoOk = binExists && self.sudoAllows(self.engineStablePath)
-            let result: EngineAuth
-            if binExists && sudoOk {
-                result = .authorized
-            } else if binExists {
-                result = .unauthorized
-            } else {
-                result = .broken
-            }
+            let probe = self.engine.probe()
+            let legacy = self.engine.legacyAuthRule()
             DispatchQueue.main.async {
-                self.engineAuth = result
-                if result == .authorized { self.lastEvent = L10n.tr("event.engineAuthorized") }
+                self.engineAuth = probe.state
+                self.engineVersion = probe.version
+                self.engineArch = probe.arch
+                self.legacyAuthRule = legacy
+                self.needsReauthorization = probe.legacyOwnRule
+                if probe.state == .authorized { self.lastEvent = L10n.tr("event.engineAuthorized") }
             }
-        }
-    }
-
-    /// 该路径是否已被 sudoers 授权免密运行（sudo -n -l 退出码 0 = 已授权）
-    private func sudoAllows(_ path: String) -> Bool {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        proc.arguments = ["-n", "-l", path]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            return proc.terminationStatus == 0
-        } catch {
-            return false
         }
     }
 
@@ -341,65 +442,27 @@ final class VPNManager: ObservableObject {
         lastEvent = repairing ? L10n.tr("event.repairing") : L10n.tr("event.authorizing")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let ok = self.installEnginePrivileged()
+            let ok = self.engine.install()
             DispatchQueue.main.async {
-                if ok {
-                    self.lastEvent = L10n.tr("event.engineAuthorized")
-                } else {
-                    self.lastEvent = L10n.tr("event.authCancelled")
-                }
+                self.lastEvent = ok ? L10n.tr("event.engineAuthorized") : L10n.tr("event.authCancelled")
                 self.refreshEngineAuth()
             }
         }
     }
 
-    /// 以管理员权限完成：创建稳定目录 → 安装内置引擎 → 写入 /etc/sudoers.d 免密规则
-    private func installEnginePrivileged() -> Bool {
-        guard let bundled = bundledEnginePath,
-              FileManager.default.fileExists(atPath: bundled) else { return false }
-        let user = NSUserName()
-        let rule = "\(user) ALL=(root) NOPASSWD: \(engineStablePath)\n"
-        let shell = """
-        mkdir -p /usr/local/vpnstatusbar
-        /bin/cp -f '\(bundled)' /usr/local/vpnstatusbar/openvpn
-        /bin/chmod 755 /usr/local/vpnstatusbar/openvpn
-        printf '%s' '\(rule)' > /etc/sudoers.d/vpnstatusbar
-        /bin/chmod 440 /etc/sudoers.d/vpnstatusbar
-        """
-        let escaped = shell
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let osa = "do shell script \"\(escaped)\" with administrator privileges"
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", osa]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            return proc.terminationStatus == 0
-        } catch {
-            return false
-        }
-    }
-
     // MARK: - 配置读写（v2）
 
-    /// 保存配置：ovpn 内容复制到 Application Support，用户名存 UserDefaults，密码存 Keychain
+    /// 保存配置：ovpn 内容复制到 Application Support，用户名存档案，密码存 Keychain
     /// - Parameters:
-    ///   - ovpnData: 导入的 ovpn 文件内容
+    ///   - ovpnData: 导入 / 编辑后的 ovpn 内容
     ///   - fileName: 原始文件名（记录显示用）
     ///   - username: 鉴权用户名
-    ///   - password: 鉴权密码（可传 nil 表示保持原有）
-    func saveConfig(ovpnData: Data, fileName: String, username: String, password: String?) {
-        // 多配置路径：新建档案
-        if store.loadAll().isEmpty && FileManager.default.fileExists(atPath: "\(configDir)/config.ovpn") && !FileManager.default.fileExists(atPath: store.ovpnPath(for: "tmp")) {
-            // 已在 init 迁移，此分支保留兼容
-        }
-        // 若处于编辑模式（已有 activeProfile），更新该档案而非新建
-        if let active = activeProfile, profiles.contains(where: { $0.id == active.id }), username == active.username || password == nil {
-            // 编辑：更新 ovpn 与用户名
+    ///   - password: 鉴权密码（nil 表示保持原有密码）
+    ///   - targetProfileId: 编辑模式传目标档案 id（原地更新）；nil 表示新建档案
+    func saveConfig(ovpnData: Data, fileName: String, username: String, password: String?, targetProfileId: String?) {
+        // 编辑模式由调用方显式指定目标档案，不再用“用户名是否变化”反推用户意图
+        // （用户名与密码同时修改时那个判定会误算成新增，产生重复档案）
+        if let id = targetProfileId, let active = profiles.first(where: { $0.id == id }) {
             try? ovpnData.write(to: URL(fileURLWithPath: store.ovpnPath(for: active.id)), options: .atomic)
             var updated = active
             updated.fileName = fileName
@@ -408,7 +471,7 @@ final class VPNManager: ObservableObject {
             updated.serverAddress = VPNProfile.parseServerAddress(from: String(data: ovpnData, encoding: .utf8) ?? "")
             updated.updatedAt = Date()
             store.update(updated)
-            if let pwd = password {
+            if let pwd = password, !pwd.isEmpty {
                 if !Keychain.savePassword(pwd, account: store.keychainAccount(for: active.id)) {
                     lastEvent = L10n.tr("event.credFailed")
                     return
@@ -438,18 +501,11 @@ final class VPNManager: ObservableObject {
         loadLogTail()
     }
 
-    /// 更新当前档案的凭据（用户名/密码）而不新建
-    func updateActiveCredentials(username: String, password: String?) {
-        guard var p = activeProfile else { return }
-        p.username = username
-        p.updatedAt = Date()
-        store.update(p)
-        UserDefaults.standard.set(username, forKey: kUsername)
-        if let pwd = password, !pwd.isEmpty {
-            _ = Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id))
-        }
-        refreshProfiles()
-        lastEvent = L10n.tr("event.credUpdated")
+    /// 指定档案的 ovpn 内容（编辑模式下未重新选文件时复用 → 改用户名/密码不必重选文件）
+    func profileOvpnData(id: String) -> (data: Data, fileName: String)? {
+        guard let p = profiles.first(where: { $0.id == id }),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: store.ovpnPath(for: p.id))) else { return nil }
+        return (data, p.fileName)
     }
 
     /// 清除配置（多配置：删除当前档案；兼容旧单文件）
@@ -457,7 +513,8 @@ final class VPNManager: ObservableObject {
         let fm = FileManager.default
         manualDisconnect = true
         desiredConnected = false
-        _ = sendManagementCommand("signal SIGTERM\n")
+        signalTerminate()
+        mgmt.stop()
         terminateProcess()
         process = nil
         cleanupAuthFile()
@@ -478,6 +535,7 @@ final class VPNManager: ObservableObject {
         status = isConfigured ? .disconnected : .unconfigured
         lastEvent = profiles.isEmpty ? L10n.tr("event.profileCleared") : L10n.tr("event.profileDeleted")
         loadLogTail()
+        updateWatchdog()
     }
 
     // MARK: - 对外操作
@@ -492,8 +550,9 @@ final class VPNManager: ObservableObject {
         // VPN 引擎授权前置校验（内置 openvpn 需一次免密授权）
         switch engineAuth {
         case .checking:
-            refreshEngineAuth()
-            lastEvent = L10n.tr("event.engineChecking")
+            // 探测还没出结果：等结果再继续，而不是把这次点击吞掉（首次连接/刚启动时最常见）
+            awaitEngineAuthThenConnect()
+            return
         case .authorizing:
             lastEvent = L10n.tr("event.engineAuthorizing")
             status = .disconnected
@@ -512,31 +571,86 @@ final class VPNManager: ObservableObject {
         manualDisconnect = false
         desiredConnected = true
         reconnectCount = 0
+        outageAttempt = 0
         retryDelay = 5
-        isWaitingRetry = false
         retryDeadline = nil
         lastEvent = L10n.tr("event.connecting")
-        // 清理上次异常退出残留的 openvpn 实例（否则 management 端口被占，新实例无法启动）
-        stopExistingInstance()
-        startVPNProcess()
+        prepareAndStart()
+    }
+
+    /// 授权探测未完成时：等结果，已授权就继续这次连接意图
+    private func awaitEngineAuthThenConnect() {
+        guard !isAwaitingEngineProbe else {
+            lastEvent = L10n.tr("event.engineChecking")
+            return
+        }
+        isAwaitingEngineProbe = true
+        lastEvent = L10n.tr("event.engineChecking")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let probe = self.engine.probe()
+            DispatchQueue.main.async {
+                self.isAwaitingEngineProbe = false
+                self.engineAuth = probe.state
+                self.engineVersion = probe.version
+                self.engineArch = probe.arch
+                self.needsReauthorization = probe.legacyOwnRule
+                switch probe.state {
+                case .authorized:
+                    self.connect()
+                case .unauthorized:
+                    self.lastEvent = L10n.tr("event.engineUnauthorized")
+                    self.status = .disconnected
+                case .broken:
+                    self.lastEvent = L10n.tr("event.engineBroken")
+                    self.status = .disconnected
+                default:
+                    self.lastEvent = L10n.tr("event.engineChecking")
+                    self.status = .disconnected
+                }
+            }
+        }
     }
 
     /// 重连等待中立即重连（跳过剩余倒计时）
     func reconnectNow() {
         guard case .reconnecting = status else { return }
+        lastEvent = L10n.tr("event.reconnectNow")
+        prepareAndStart()
+    }
+
+    /// 启动序列：先清理上次异常退出残留的 openvpn 实例（否则 management 端口被占，新实例无法启动），
+    /// 再拉起进程。整段放在后台 —— 残留清理要等旧实例让出端口 1.5s，放主线程会把面板冻住。
+    private func prepareAndStart() {
         retryTimer?.invalidate()
         retryTimer = nil
         retryDeadline = nil
         isWaitingRetry = false
-        lastEvent = L10n.tr("event.reconnectNow")
-        startVPNProcess()
-    }
-
-    /// 检测并优雅停止残留的 openvpn 实例（app 崩溃/强杀后可能遗留）
-    private func stopExistingInstance() {
-        guard sendManagementCommand("signal SIGTERM\n") != nil else { return }
-        lastEvent = L10n.tr("event.foundStale")
-        Thread.sleep(forTimeInterval: 1.5)
+        if status != .connected { status = .connecting }
+        isStarting = true
+        startingAt = Date()
+        // 先断开常驻推送：它占着 management 接口（同时只服务一个客户端），
+        // 不释放的话下面探测残留实例会连不上
+        mgmt.stop()
+        let logPath = logFile
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let hadStale = self.sendOneShotCommand(ManagementProtocol.terminateCommand) != nil
+            if hadStale { Thread.sleep(forTimeInterval: 1.5) }
+            // 日志轮转（整文件读 + 写回）挪到后台，且发生在任何进程拉起之前，不会和 runner 抢文件
+            Self.rotateLogIfNeeded(atPath: logPath)
+            DispatchQueue.main.async {
+                self.isStarting = false
+                self.startingAt = nil
+                guard self.desiredConnected, !self.manualDisconnect else {
+                    // 等待期间用户改主意了（取消/断开）：不能把 .connecting 留在界面上
+                    self.convergeToDisconnected(reason: "启动前用户已取消")
+                    return
+                }
+                if hadStale { self.lastEvent = L10n.tr("event.foundStale") }
+                self.startVPNProcess()
+            }
+        }
     }
 
     /// 断开 VPN（不触发自动重连）
@@ -551,28 +665,32 @@ final class VPNManager: ObservableObject {
         retryTimer = nil
         retryDeadline = nil
         isWaitingRetry = false
+        tunnelLocalAddress = nil
+        trafficStore.update(rate: nil)
+        lastTrafficSample = nil
         status = .disconnected
         lastEvent = L10n.tr("event.disconnecting")
         // 优先通过 openvpn management 接口优雅退出（无需 root 权限）
-        let resp = sendManagementCommand("signal SIGTERM\n")
-        if resp == nil {
+        if !signalTerminate() {
             // 兜底：直接终止进程（对 root 属主进程可能因权限失败）
             terminateProcess()
         }
+        mgmt.stop()
         process = nil
         cleanupAuthFile()
         loadLogTail()
         lastEvent = L10n.tr("event.disconnectedManual")
+        updateWatchdog()      // 进程已收掉：空闲断开要停表，别再常驻唤醒
     }
 
     /// 退出前清理
     func shutdown() {
         retryTimer?.invalidate()
         statusTimer?.invalidate()
-        clockTimer?.invalidate()
         manualDisconnect = true
         desiredConnected = false
-        _ = sendManagementCommand("signal SIGTERM\n")
+        signalTerminate()
+        mgmt.stop()
         terminateProcess()
         cleanupAuthFile()
     }
@@ -592,16 +710,30 @@ final class VPNManager: ObservableObject {
             return
         }
 
+        // management 接口密码：每次连接随机生成、只落在 0600 文件里（同机其他用户无法对隧道发 SIGTERM）。
+        // 写失败就不带密码（退回旧行为），不影响连接本身。
+        let mgmtPassword = Self.randomPassword()
+        let hasMgmtPassword = (try? mgmtPassword.write(toFile: mgmtPasswordFile, atomically: true, encoding: .utf8)) != nil
+            && (try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mgmtPasswordFile)) != nil
+
+        // 日志：超限轮转已在 prepareAndStart 的后台块里做过；本次启动会写一行会话分隔记录（runner 负责写入），
+        // 日志是追加模式，断线后仍能回看之前几次发生了什么
+        let note = OpenVPNLog.sessionNote(date: Date(), attempt: outageAttempt + 1, profile: profileName)
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/bash")
         // 参数化调用：runner 不再读取同目录 .ovpn/.user
         proc.arguments = [
             runnerScript,
-            "--openvpn", engineStablePath,
+            // 不再传 --openvpn：引擎路径由 root 属主包装脚本固定（权限面收严）
             "--ovpn", configPath,
             "--auth", authFile,
             "--log", logFile,
+            "--session-note", note,
         ]
+        if hasMgmtPassword {
+            proc.arguments?.append(contentsOf: ["--mgmt-password-file", mgmtPasswordFile])
+        }
         proc.standardOutput = FileHandle.nullDevice
         // 捕获 stderr：runner 探测/权限失败时给出可读原因（写入日志 + 事件行）
         let errPipe = Pipe()
@@ -616,10 +748,13 @@ final class VPNManager: ObservableObject {
         do {
             try proc.run()
             process = proc
+            updateWatchdog()        // 进程出现了：看门狗间隔/启停跟着重算
             if status != .connected {
                 status = .connecting
             }
             lastEvent = L10n.tr("event.openvpnStarted")
+            // 常驻推送：openvpn 绑定 management 端口略晚于进程启动，客户端会自己重试
+            mgmt.start(password: hasMgmtPassword ? mgmtPassword : nil)
             // 启动后立即读一次日志
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.loadLogTail()
@@ -646,31 +781,29 @@ final class VPNManager: ObservableObject {
 
     private func terminateProcess() {
         guard let proc = process else { return }
-        if proc.isRunning {
-            proc.terminate() // SIGTERM，openvpn 会优雅清理 tun
-            // 兜底：5 秒后仍存活则强杀（root 属主进程可能无权限，尽力而为）
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak proc] in
-                if let p = proc, p.isRunning {
-                    p.terminate()
-                }
-            }
-        }
+        // 目标进程以 root 运行（runner 内部 exec sudo），非 root 发信号会被拒绝 ——
+        // 真正生效的是 management 通道的 SIGTERM，这里只作尽力而为，不假装“强杀”。
+        if proc.isRunning { proc.terminate() }
         process = nil
     }
 
     // MARK: - openvpn management 接口
 
-    /// 通过 management 接口发送命令（如 signal SIGTERM）
-    /// openvpn 进程以 root 运行，普通用户无法直接 kill；
-    /// management 监听 127.0.0.1:7505，通过 socket 让 openvpn 自行退出。
-    private func sendManagementCommand(_ command: String) -> String? {
+    /// **一次性** management 连接（发一条命令、读回执、断开）。
+    /// 常驻推送由 `MgmtClient` 负责；这里只在推送未建立时兜底
+    /// （例如启动前的残留实例探测、或流断开时的 SIGTERM）。
+    /// openvpn 进程以 root 运行、普通用户无法直接 kill，management 通道是让 openvpn 自行退出的唯一途径。
+    private func sendOneShotCommand(_ command: String) -> String? {
+        mgmtLock.lock()
+        defer { mgmtLock.unlock() }
+
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return nil }
         defer { close(sock) }
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = UInt16(7505).bigEndian
+        addr.sin_port = ManagementProtocol.port.bigEndian
         addr.sin_addr.s_addr = inet_addr("127.0.0.1")
 
         let connectResult = withUnsafePointer(to: &addr) { ptr in
@@ -697,9 +830,68 @@ final class VPNManager: ObservableObject {
             if n <= 0 { break }
             received += n
             response += String(decoding: buffer[0..<received], as: UTF8.self)
-            if response.contains("SUCCESS") || response.contains("ERROR") { break }
+            // SUCCESS/ERROR 是命令类回执的结尾，END 是 state 等查询类命令的结尾
+            if response.contains("SUCCESS") || response.contains("ERROR") || response.contains("END") { break }
         }
         return response.isEmpty ? nil : response
+    }
+
+    /// 查询 openvpn 报告的隧道状态与地址（一次性 `state` 查询）
+    /// 仅用作兜底：常驻推送（MgmtClient）正常时状态由 `>STATE:` 驱动，不需要轮询。
+    /// 返回 nil 表示查询失败（接口尚未监听 / 被别的客户端占用），调用方应保持当前状态而非误判
+    private func queryTunnelInfo() -> TunnelInfo? {
+        guard let resp = sendOneShotCommand("state\n") else { return nil }
+        let info = OpenVPNMgmt.parseInfo(resp)
+        return info.state == .unknown ? nil : info
+    }
+
+    /// 停止隧道：有常驻流就走流（接口同时只服务一个客户端，另开连接会被拒），
+    /// 没有流时用一次性连接兜底 —— 停隧道的能力不依赖流的健康。
+    /// 返回是否至少把 SIGTERM 发出去了。
+    @discardableResult
+    private func signalTerminate() -> Bool {
+        if mgmt.isStreaming {
+            mgmt.send(ManagementProtocol.terminateCommand)
+            return true
+        }
+        return sendOneShotCommand(ManagementProtocol.terminateCommand) != nil
+    }
+
+    /// 网络可用性变化（主线程回调）：只在"期望连接但没连上"时立刻重试。
+    /// 严格不绕过既有停止条件：凭据错误停下（desiredConnected=false）、自动重连关闭、
+    /// 引擎未授权 —— 一律不动；正在连接中的进程也不打断（openvpn 自己会重试）。
+    private func handleNetworkPathChange() {
+        guard desiredConnected, !manualDisconnect else { return }
+        guard status == .disconnected || isWaitingRetry else { return }
+        guard autoReconnect, engineAuth == .authorized else { return }
+        lastEvent = L10n.tr("event.networkChanged")
+        prepareAndStart()
+    }
+
+    /// management 推送事件（主线程回调）
+    private func handleManagementEvent(_ event: ManagementEvent) {
+        switch event {
+        case .state(let info):
+            // 推送的状态直接喂给既有状态机（与轮询走同一条收敛路径）
+            applyRefresh(tunnelInfo: info,
+                         procRunning: process?.isRunning ?? false,
+                         desired: desiredConnected,
+                         currentStatus: status)
+        case .bytecount(let rx, let tx):
+            let sample = TrafficSample(bytesIn: rx, bytesOut: tx, at: Date())
+            if let previous = lastTrafficSample, let rate = TrafficCalculator.rate(from: previous, to: sample) {
+                trafficStore.update(rate: rate)
+            } else {
+                // 首个采样、或计数器重置（重连）→ 先只给累计值，速率为 0
+                trafficStore.update(rate: TrafficRate(bytesInPerSecond: 0, bytesOutPerSecond: 0,
+                                                      totalIn: sample.bytesIn, totalOut: sample.bytesOut))
+            }
+            lastTrafficSample = sample
+        case .reply(.error(let text)):
+            stateLog.notice("management 回执错误：\(text, privacy: .public)")
+        default:
+            break
+        }
     }
 
     /// openvpn 进程退出（无论何种原因）
@@ -709,7 +901,12 @@ final class VPNManager: ObservableObject {
         defer { isHandlingExit = false }
 
         process = nil
+        updateWatchdog()
         cleanupAuthFile()
+        tunnelLocalAddress = nil
+        trafficStore.update(rate: nil)
+        lastTrafficSample = nil
+        mgmt.stop()
 
         // 手动断开：直接结束
         if manualDisconnect || !desiredConnected {
@@ -737,11 +934,26 @@ final class VPNManager: ObservableObject {
             return
         }
 
+        // 凭据错误（AUTH_FAILED）时继续重连没有意义：停止本轮自动重连并给出可操作的提示
+        // （只看本次会话段，历史会话的同名字样不会误触发）
+        if OpenVPNLog.indicatesAuthFailure(in: currentLogText()) {
+            retryTimer?.invalidate()
+            retryTimer = nil
+            retryDeadline = nil
+            isWaitingRetry = false
+            desiredConnected = false
+            status = .disconnected
+            lastEvent = L10n.tr("event.authFailedCreds")
+            loadLogTail()
+            return
+        }
+
         // 已在等待重连中：refreshState 定时器会重复触发本方法，直接忽略
         guard !isWaitingRetry else { return }
 
         reconnectCount += 1
-        status = .reconnecting(attempt: reconnectCount)
+        outageAttempt += 1
+        status = .reconnecting(attempt: outageAttempt)
         lastEvent = L10n.tr("event.reconnectIn", Int(retryDelay))
         loadLogTail()
         isWaitingRetry = true
@@ -751,38 +963,47 @@ final class VPNManager: ObservableObject {
     private func scheduleRetry() {
         retryTimer?.invalidate()
         retryDeadline = Date().addingTimeInterval(retryDelay)
-        retryTimer = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             self.isWaitingRetry = false
             self.retryDeadline = nil
-            guard self.desiredConnected, !self.manualDisconnect else { return }
+            guard self.desiredConnected, !self.manualDisconnect else {
+                self.updateWatchdog()
+                return
+            }
             self.lastEvent = L10n.tr("event.reconnectNow")
-            self.startVPNProcess()
+            self.prepareAndStart()
         }
+        timer.tolerance = min(1.0, retryDelay / 10)     // 重连晚个零点几秒无所谓，换系统合并唤醒
+        // 必须进 .common：默认 run-loop 模式在 modal 循环（例如向导里打开文件选择面板）期间不触发，
+        // 那会让"等待重连"永远等不到 —— 真机死状态的一条成因。
+        RunLoop.main.add(timer, forMode: .common)
+        retryTimer = timer
         retryDelay = min(retryDelay * 2, maxRetryDelay)
     }
 
-    // MARK: - 隧道状态监控
+    // MARK: - 隧道状态监控（看门狗）
 
-    private func startMonitoring() {
-        statusTimer = Timer.scheduledTimer(withTimeInterval: monitorInterval, repeats: true) { [weak self] _ in
+    /// 看门狗按需启停：只在「有东西需要收敛」时开表。
+    /// - busy（连接中/重连中）→ 5 秒：卡死状态要尽快被收敛兜底修回来；
+    /// - 在跑或期望在跑（含已连接）→ 30 秒：状态本来就由 management 推送驱动，这里只兜"进程挂死且不再推送"；
+    /// - 空闲断开 → 完全停表：这是菜单栏 app 最常见的状态，不该有常驻唤醒
+    ///   （原来是 5 秒一次的常驻表，等于每小时 720 次唤醒，且 99% 的时间什么也不做）。
+    private func updateWatchdog() {
+        let interval = WatchdogPolicy.interval(status: status, desired: desiredConnected, hasProcess: process != nil)
+        guard let interval else {
+            statusTimer?.invalidate()
+            statusTimer = nil
+            return
+        }
+        if let timer = statusTimer, timer.timeInterval == interval { return }   // 间隔没变就别重启
+        statusTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.refreshState()
         }
-        RunLoop.main.add(statusTimer!, forMode: .common)
-    }
-
-    /// 秒级时钟：P1 改为代理到 TickProvider，保留兼容发布以便旧订阅过渡
-    private func startClock() {
-        clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            guard self.needsTick else { return }
-            let now = Date()
-            self.clock = now
-            DispatchQueue.main.async {
-                TickProvider.shared.setNow(now)
-            }
-        }
-        RunLoop.main.add(clockTimer!, forMode: .common)
+        timer.tolerance = interval / 4      // 让系统合并唤醒；状态精度由 management 推送保证
+        RunLoop.main.add(timer, forMode: .common)
+        statusTimer = timer
     }
 
     private func refreshState() {
@@ -790,84 +1011,97 @@ final class VPNManager: ObservableObject {
         let desired = desiredConnected
         let currentStatus = status
         let procRunning = process?.isRunning ?? false
-        // 仅当需要探测路由时才开后台线程（避免每次都起线程）
-        let needsRouteCheck = desired && procRunning
-        guard needsRouteCheck else {
-            // 无需路由探测，直接在主线程收敛状态
-            if !desired {
-                if currentStatus.isConnected || (currentStatus != .disconnected && currentStatus != .unconfigured) {
-                    DispatchQueue.main.async { [weak self] in self?.status = .disconnected }
-                }
-            } else if !procRunning {
-                DispatchQueue.main.async { [weak self] in self?.handleProcessExit() }
-            }
+
+        // 1) 收敛兜底：busy 但「没进程 / 没在启动 / 没有已武装的重试」= 卡死。
+        //    真机出现过这种状态（一直"重连中"、无隧道、无重试、菜单栏图标一直呼吸且 9% CPU）：
+        //    以前这里会在 isWaitingRetry 上直接 return，于是永不恢复。
+        let verdict = TunnelConvergence.verdict(TunnelConvergenceInput(
+            status: currentStatus,
+            desired: desired,
+            hasProcess: procRunning,
+            isStarting: isStarting,
+            secondsSinceStart: startingAt.map { Date().timeIntervalSince($0) } ?? 0,
+            isWaitingRetry: isWaitingRetry,
+            retryArmed: retryTimer != nil,
+            autoReconnect: autoReconnect,
+            engineAuthorized: engineAuth == .authorized
+        ))
+        switch verdict {
+        case .forceDisconnected:
+            convergeToDisconnected(reason: "状态与在飞的动作不一致")
             return
+        case .scheduleRetry:
+            stateLog.notice("收敛兜底：busy 状态没有在飞的动作，补一次重试")
+            isWaitingRetry = false      // 清掉可能卡住的等待标记，让 handleProcessExit 走完整路径
+            handleProcessExit()
+            return
+        case .none:
+            break
         }
+
+        // 2) 推送不可用时才做一次性查询（常驻推送正常时状态由 >STATE: 驱动，不需要轮询）
+        let needsTunnelQuery = desired && procRunning && !mgmt.isStreaming
+        guard needsTunnelQuery else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let hasRoute = self?.checkTunnelRoute() ?? false
+            let tunnelInfo = self?.queryTunnelInfo()
             DispatchQueue.main.async { [weak self] in
-                self?.applyRefresh(hasRoute: hasRoute, procRunning: procRunning, desired: desired, currentStatus: currentStatus)
+                self?.applyRefresh(tunnelInfo: tunnelInfo, procRunning: procRunning, desired: desired, currentStatus: currentStatus)
             }
         }
     }
 
-    private func applyRefresh(hasRoute: Bool, procRunning: Bool, desired: Bool, currentStatus: VPNStatus) {
+    /// 收敛到「已断开」：清掉等待/重试标记、停表，并在有必要时收掉残留进程。
+    /// 只维护状态与计时器，**不改 `desiredConnected`**（用户意图由 connect/disconnect 负责），
+    /// 否则会把"用户还想连"的语义弄丢、让重连彻底停摆。
+    private func convergeToDisconnected(reason: String) {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        retryDeadline = nil
+        isWaitingRetry = false
+        startingAt = nil
+        if process != nil {
+            terminateProcess()
+            cleanupAuthFile()
+            mgmt.stop()
+            tunnelLocalAddress = nil
+            trafficStore.update(rate: nil)
+            lastTrafficSample = nil
+        }
+        if status != .disconnected { status = .disconnected }
+        stateLog.notice("收敛兜底：\(reason, privacy: .public) → disconnected")
+        updateWatchdog()
+    }
+
+    private func applyRefresh(tunnelInfo: TunnelInfo?, procRunning: Bool, desired: Bool, currentStatus: VPNStatus) {
         if desired {
-            if procRunning && hasRoute {
-                if status != .connected {
-                    retryDelay = 5
-                    retryDeadline = nil
-                    status = .connected
-                    connectedAt = Date()
-                    lastEvent = L10n.tr("event.tunnelEstablished")
-                    loadLogTail()
-                }
-            } else if procRunning && !hasRoute {
-                if status != .connecting && !status.isConnected {
+            if procRunning, let tunnelInfo {
+                tunnelLocalAddress = tunnelInfo.localAddress
+                if tunnelInfo.state.isConnected {
+                    if status != .connected {
+                        retryDelay = 5
+                        retryDeadline = nil
+                        outageAttempt = 0
+                        status = .connected
+                        connectedAt = Date()
+                        lastEvent = L10n.tr("event.tunnelEstablished")
+                        loadLogTail()
+                    }
+                } else if status != .connecting && !status.isConnected {
                     status = .connecting
                 }
             } else if !procRunning {
                 handleProcessExit()
             }
+            // tunnelInfo == nil：管理接口查询失败，保持当前状态（进程存活即不误判为断开）
         } else {
+            tunnelLocalAddress = nil
             if status.isConnected || (status != .disconnected && status != .unconfigured) {
                 status = .disconnected
             }
         }
     }
 
-    /// 检查 VPN 内网路由是否建立（route-nopull + 静态路由 10.8/16 → utun）
-    /// 注意：netstat 输出中路由为缩写格式 "10.8/16"，不是 "10.8.0.0/16"
-    private func checkTunnelRoute() -> Bool {
-        let output = runCommand("/usr/sbin/netstat", ["-rn", "-f", "inet"])
-        guard output.contains(routePattern) else { return false }
-        // 路由必须指向 utun 隧道接口
-        return output.contains("utun")
-    }
-
     // MARK: - 辅助
-
-    private func runCommand(_ path: String, _ args: [String]) -> String {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: path)
-        proc.arguments = args
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = pipe
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            return ""
-        }
-    }
-
-    /// 执行一段 bash 命令并返回输出（用于 openvpn 探测）
-    private func runShell(_ script: String) -> String {
-        runCommand("/bin/bash", ["-c", script])
-    }
 
     /// runner 启动失败时读取 stderr，写入日志并反映到事件行（不再吞错误）
     private func captureRunnerError(_ pipe: Pipe) {
@@ -892,16 +1126,25 @@ final class VPNManager: ObservableObject {
 
     private func cleanupAuthFile() {
         try? FileManager.default.removeItem(atPath: authFile)
+        try? FileManager.default.removeItem(atPath: mgmtPasswordFile)
     }
 
+    /// management 接口密码（随机 hex；不进命令行参数、不落明文日志）
+    private static func randomPassword() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 刷新面板展示的日志末尾：后台只读文件末尾窗口，算好文案后回主线程发布。
+    /// （以前每次状态变化都在主线程整读最多 512 KB 日志，重连循环里每轮还会读两遍）
     private func loadLogTail() {
-        guard let content = try? String(contentsOfFile: logFile, encoding: .utf8) else {
-            logTail = "（暂无日志）"
-            return
+        let path = logFile
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let tail = LogFile.tail(atPath: path, maxBytes: Self.displayTailBytes)
+            let text = Self.logTailText(from: tail)
+            DispatchQueue.main.async { self?.logTail = text }
         }
-        let lines = content.split(separator: "\n")
-        let tail = lines.suffix(4).joined(separator: "\n")
-        logTail = tail.isEmpty ? "（暂无日志）" : String(tail)
     }
 
     // MARK: - 格式化
@@ -910,14 +1153,5 @@ final class VPNManager: ObservableObject {
     var retryRemaining: Int {
         guard let deadline = retryDeadline else { return 0 }
         return max(0, Int(deadline.timeIntervalSinceNow.rounded(.up)))
-    }
-
-    func formattedDuration() -> String {
-        guard let start = connectedAt else { return "--:--:--" }
-        let elapsed = Int(Date().timeIntervalSince(start))
-        let h = elapsed / 3600
-        let m = (elapsed % 3600) / 60
-        let s = elapsed % 60
-        return String(format: "%02d:%02d:%02d", h, m, s)
     }
 }

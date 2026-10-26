@@ -48,8 +48,47 @@ enum Design {
 
 enum PanelMetrics {
     static let width:   CGFloat = 300
+    /// 固定面板高度：窗口尺寸在打开期间恒定 —— 平台"内容变矮时窗口不回收高度"的行为
+    /// 因此完全不会发作（不会错位、不会闪烁，也不会留下吞点击的透明区域）。
+    static let height:  CGFloat = 360
     static let padding: CGFloat = 12
     static let gap:     CGFloat = 8
+}
+
+// MARK: - 字号 / 圆角令牌
+// 面板此前把 10 / 10.5 / 11 / 12 / 13 / 14 / 15 / 16 / 22 等字号散落在各处，
+// 这里集中定义：改字号只需动一处，且新代码不再引入第 10 个数值。
+
+extension Design {
+    enum Font {
+        /// 提示、辅助说明（原 10）
+        static let hint: CGFloat = 10
+        /// 极小字：等宽值（路径、日志）、卡片副标题（原 10.5）
+        static let fine: CGFloat = 10.5
+        /// 次要文字：行标签、小按钮（原 11）
+        static let caption: CGFloat = 11
+        /// 常规文字（原 12）
+        static let label: CGFloat = 12
+        /// 主要文字：按钮、状态标题（原 13）
+        static let body: CGFloat = 13
+        /// 图标：14 / 15 / 16 三档
+        static let icon: CGFloat = 14
+        static let iconMedium: CGFloat = 15
+        static let iconLarge: CGFloat = 16
+        /// 完成态大图标（原 22）
+        static let iconHero: CGFloat = 22
+    }
+
+    enum Corner {
+        /// 原 5：返回箭头等紧凑控件
+        static let compact: CGFloat = 5
+        /// 原 6：行、小卡片
+        static let small: CGFloat = 6
+        /// 原 7：按钮
+        static let medium: CGFloat = 7
+        /// 原 8：卡片
+        static let large: CGFloat = 8
+    }
 }
 
 // MARK: - 浅色/深色自适应色

@@ -1,32 +1,42 @@
 import Foundation
 import Combine
 
-/// 轻量时钟源：仅承载每秒 tick，隔离 `VPNManager.clock` 对全量视图的无效刷新
-/// 使用单例，前向兼容 `VPNManager.clock`（保留但不再作为主要订阅源）
+/// 秒级时钟源：只给"需要每秒刷新"的子视图用（连接时长、重连倒计时）。
+///
+/// 按需启停：面板可见时才走表（由 `VPNManager` 依 `PanelVisibility` 驱动），
+/// 面板关闭后不再有任何 1 秒唤醒 —— 时长在面板重新打开时用 `setNow` 立刻校正。
 final class TickProvider: ObservableObject {
-    static let shared = TickProvider()
+    /// 并发约定：只在主线程访问（SwiftUI 视图 + 主线程回调调用 setActive/setNow）
+    nonisolated(unsafe) static let shared = TickProvider()
 
     @Published private(set) var now: Date = Date()
 
     private var timer: Timer?
 
-    private init() {
-        start()
-    }
+    private init() {}
 
-    private func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.now = Date()
+    /// 面板可见性变化时调用
+    func setActive(_ active: Bool) {
+        if active {
+            setNow(Date())   // 立刻校正：面板刚打开时时长/倒计时必须是对的
+            guard timer == nil else { return }
+            let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.now = Date()
+            }
+            // 0.1 秒容差：让系统把这次唤醒和别的定时器合并（秒级展示差个零点几秒看不出来）
+            timer.tolerance = 0.1
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        } else {
+            timer?.invalidate()
+            timer = nil
         }
-        if let timer { RunLoop.main.add(timer, forMode: .common) }
     }
 
+    /// 立即把时钟推进到当前时刻（外部只想刷新一次时用）
     func setNow(_ date: Date) {
         now = date
     }
 
-    func stop() {
-        timer?.invalidate()
-        timer = nil
-    }
+    var isTicking: Bool { timer != nil }
 }

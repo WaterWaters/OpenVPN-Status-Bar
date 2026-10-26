@@ -1,28 +1,136 @@
 import Foundation
+import os
 
+/// 面板文案（单语言：简体中文，代码内表）。
+///
+/// 曾经走 `Bundle.module` + `.lproj` 多语言资源，代价是：资源没打进 app、或 strings 文件损坏时，
+/// 界面会**整个退化成裸 key**（真机上出现过一次），而本项目只面向中文用户。
+/// 现在改成代码内的中文表 —— 没有资源打包环节，也就没有这类失效路径。
+/// 新增文案在这里加一条即可；`tr` 找不到 key 会返回 key 本身并打日志，便于发现漏加。
 enum L10n {
     static func tr(_ key: String, _ args: CVarArg...) -> String {
-        let format = Bundle.module.localizedString(forKey: key, value: nil, table: "Localizable")
+        guard let format = table[key] else {
+            missingKeyLog.error("缺少文案 key: \(key, privacy: .public)")
+            return key
+        }
         if args.isEmpty { return format }
-        return String(format: format, locale: Locale.current, arguments: args)
+        return String(format: format, locale: Locale(identifier: "zh_Hans"), arguments: args)
     }
 
-    // Common
-    static var appName: String { tr("app.name") }
-    // ContentView
-    static var autoReconnect: String { tr("autoreconnect.title") }
-    static var settings: String { tr("settings.title") }
-    static var log: String { tr("log.title") }
-    static var notConfigured: String { tr("notConfigured") }
-    static var quit: String { tr("quit") }
-    static var authEngine: String { tr("auth.engine") }
-    static var connectionConfig: String { tr("connection.config") }
-    static var noLog: String { tr("log.empty") }
-    static var nextStep: String { tr("wizard.next") }
-    static var username: String { tr("wizard.username") }
-    static var password: String { tr("wizard.password") }
-    static var saveAndFinish: String { tr("wizard.save") }
-    static var done: String { tr("wizard.done") }
-    static var dropOvpn: String { tr("wizard.drop") }
-    static var selectFile: String { tr("wizard.selectFile") }
+    private static let missingKeyLog = Logger(subsystem: "io.vpnstatusbar", category: "l10n")
+
+    private static let table: [String: String] = [
+        "app.name": "VPNStatusBar",
+        "auth.authorize": "授权 VPN…",
+        "auth.checking": "检测中…",
+        "auth.engine": "授权 · VPN 引擎",
+        "auth.engine.authorizing": "VPN 引擎 · 授权中…",
+        "auth.engine.checking": "VPN 引擎 · 检测中…",
+        "auth.upgrade.hint": "检测到旧版授权规则（免密直指引擎二进制，允许任意参数）。请点上方按钮重新授权一次，改用只接受固定动作并校验配置的启动脚本。",
+        "auth.reauthorize": "重新授权…",
+        "auth.repair": "修复并重新授权…",
+        "common.cancel": "取消",
+        "common.delete": "删除",
+        "connection.config": "连接配置",
+        "connection.confirm.delete": "删除「%@」？配置与密码会一并移除",
+        "connection.notConfigured": "尚未导入配置",
+        "engine.warn.broken": "VPN 引擎异常，需修复",
+        "engine.warn.settings": "设置 ›",
+        "engine.warn.unauthorized": "VPN 引擎未授权，可能无法连接",
+        "event.authCancelled": "授权未完成：弹窗被取消。可在设置中重试。",
+        "event.authFailed": "无法生成认证文件，请检查配置",
+        "event.authFailedCreds": "用户名或密码错误，已停止自动重连：请在「配置」中修改凭据",
+        "event.authorizing": "正在授权 VPN 引擎…",
+        "event.autoReconnectOff": "隧道已断开（自动重连已关闭）",
+        "event.connecting": "发起连接…",
+        "event.credFailed": "凭据保存失败（钥匙串）",
+        "event.disconnectedManual": "已手动断开",
+        "event.disconnecting": "正在断开…",
+        "event.engineAuthorized": "VPN 引擎已授权",
+        "event.engineAuthorizing": "VPN 引擎授权中，请稍候…",
+        "event.engineBroken": "VPN 引擎异常：点「设置…」→「修复并重新授权…」",
+        "event.engineChecking": "VPN 引擎检测中，请稍候…",
+        "event.engineUnauthorized": "VPN 引擎未授权：点「设置…」→「授权 VPN…」",
+        "event.foundStale": "发现残留连接，正在清理…",
+        "event.needConfig": "请先导入 VPN 配置",
+        "event.networkChanged": "网络已变化，正在重新连接…",
+        "event.noProfile": "尚未导入 VPN 配置",
+        "event.openvpnStarted": "openvpn 已启动",
+        "event.profileCleared": "配置已清除",
+        "event.profileDeleted": "已删除当前配置",
+        "event.profileSaved": "配置已保存：%@",
+        "event.profileSwitched": "已切换配置：%@",
+        "event.ready": "就绪",
+        "event.reconnectIn": "连接断开，%d 秒后自动重连…",
+        "event.reconnectNow": "执行自动重连…",
+        "event.repairing": "正在修复并授权 VPN 引擎…",
+        "event.startFailed": "启动失败：%@",
+        "event.stoppedReconnect": "已停止自动重连",
+        "event.tunnelEstablished": "隧道已建立",
+        "launchAtLogin": "开机启动",
+        "log.copied": "已复制",
+        "log.copy": "复制日志",
+        "log.empty": "（暂无日志）",
+        "log.open": "打开日志文件",
+        "log.title": "日志",
+        "traffic.placeholder": "未连接（暂无流量）",
+        "traffic.help": "本次连接累计：↓ %@ ↑ %@",
+        "config.addProfile": "添加配置…",
+        "config.edit": "修改",
+        "config.remove": "删除",
+        "prefs.title": "偏好",
+        "autoreconnect.short": "自动重连",
+        "quit.short": "退出",
+        "auth.status.authorized": "已授权",
+        "auth.status.unauthorized": "未授权 · 需一次授权以建立隧道",
+        "auth.status.broken": "引擎异常 · 需修复",
+        "auth.paths.help": "启动脚本：%@\n引擎：%@",
+        "connection.switchTo": "切换到「%@」",
+        "status.reconnected.short": "已重连 %d 次",
+        "notConfigured": "导入 VPN 配置后开始",
+        "notifications": "通知",
+        "notify.connected.body": "%@ · 隧道已建立",
+        "notify.connected.title": "VPN 已连接",
+        "notify.disconnected.body": "%@ · 已断开连接",
+        "notify.disconnected.title": "VPN 已断开",
+        "notify.reconnectFailed.body": "%@ · 第 %d 次重连失败",
+        "notify.reconnectFailed.title": "重连失败",
+        "quit": "退出 VPNStatusBar",
+        "status.cancelConnect": "取消连接",
+        "status.connect": "连接 VPN",
+        "status.connecting": "连接中…",
+        "status.connecting.hint": "正在建立隧道…",
+        "status.disconnect": "断开 VPN",
+        "status.import": "导入配置…",
+        "status.reconnectNow": "立即重连",
+        "status.retry": "%d 秒后自动重试",
+        "tab.overview": "概览",
+        "tab.profiles": "配置",
+        "tab.settings": "设置",
+        "wizard.back": "上一步",
+        "wizard.done": "完成",
+        "wizard.drop": "把 .ovpn 文件拖到这里",
+        "wizard.editTitle": "修改配置",
+        "wizard.error.invalid": "该文件不是有效的 OpenVPN 配置（缺少 remote/client 指令）",
+        "wizard.error.needFile": "请先选择 ovpn 文件",
+        "wizard.error.read": "无法读取文件：%@",
+        "wizard.error.readConfig": "读取配置文件失败",
+        "wizard.importTitle": "配置 VPN",
+        "wizard.keepCurrent": "保留当前配置，直接修改凭据",
+        "wizard.next": "下一步",
+        "wizard.password": "密码",
+        "wizard.password.hint": "密码仅存入 macOS 钥匙串（Keychain），连接时临时生成认证文件，断开即删除。",
+        "wizard.password.hint.edit": "密码留空表示保持原密码；仅在填写时更新。",
+        "wizard.password.keep": "留空保持原密码",
+        "wizard.pick.title": "选择 OpenVPN 配置文件",
+        "wizard.save": "保存并完成",
+        "wizard.saved": "配置已保存",
+        "wizard.saved.desc": "%@ · %@ · 密码已存入钥匙串",
+        "wizard.selectFile": "选择文件…",
+        "wizard.step": "%@ · 第 %d / 3 步",
+        "wizard.summary.standard": "标准 OpenVPN 配置",
+        "wizard.updated": "配置已更新",
+        "wizard.username": "用户名",
+        "wizard.username.placeholder": "例如 user01",
+    ]
 }

@@ -2,7 +2,12 @@ import Foundation
 import ServiceManagement
 
 enum LaunchAtLogin {
+    /// 非 .app 启动（`swift run`）时没有应用身份，SMAppService 不可用 —— 按“不支持”处理，
+    /// 既避免异常，也避免在开发态误注册登录项
+    private static var isSupported: Bool { Bundle.main.bundleIdentifier != nil }
+
     static var isEnabled: Bool {
+        guard isSupported else { return false }
         if #available(macOS 13.0, *) {
             return SMAppService.mainApp.status == .enabled
         }
@@ -10,6 +15,7 @@ enum LaunchAtLogin {
     }
 
     static func setEnabled(_ enabled: Bool) {
+        guard isSupported else { return }
         if #available(macOS 13.0, *) {
             do {
                 if enabled {
