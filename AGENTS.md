@@ -31,8 +31,8 @@ packages the DMG on an arm64 runner, writes `SHA256SUMS.txt`, and creates the Gi
 
 ## Architecture
 
-- `Package.swift:6-24` — two targets only: `VPNStatusBarCore` (library, `Sources/VPNStatusBarCore/`) + `VPNStatusBar` (executable, `Sources/VPNStatusBar/`, depends on Core). Test target `VPNStatusBarCoreTests`.
-- `Sources/VPNStatusBarCore/` — pure logic, no UI/I/O (`VPNStatus.swift`, `EngineAuth.swift`). Keep it that way — this is what tests cover.
+- `Package.swift` — three targets: `VPNStatusBarCore` (library, `Sources/VPNStatusBarCore/`) + `VPNStatusBar` (executable, `Sources/VPNStatusBar/`, depends on Core) + test target `VPNStatusBarCoreTests`.
+- `Sources/VPNStatusBarCore/` — pure logic, no UI/I/O (`VPNStatus.swift`, `EngineAuth.swift`, `TunnelState.swift`, `TunnelConvergence.swift`, `ManagementProtocol.swift`). Keep it that way — this is what tests cover.
 - `Sources/VPNStatusBar/` — SwiftUI panel, `VPNManager` state machine, `Keychain`, `App.swift` entrypoint.
 - `Support/vpn-runner.sh` — openvpn launcher, bundled into `Contents/Resources/`. App passes `--openvpn/--ovpn/--auth/--log/--session-note`; fallback probes brew paths + sudoers. Logs are **appended** (`--log-append`): each start first writes a `--session-note` separator line, and the app only judges credential failures from the current session (`OpenVPNLog.currentSession`) — do not reintroduce truncation without revisiting that.
   **日志读取只读末尾窗口**（展示 16 KB / 凭据判定 64 KB，见 `Sources/VPNStatusBar/LogFile.swift`），切片走 `OpenVPNLog.currentSessionFromTail(_:tailIsWholeFile:)`；窗口里没有分隔行**且文件更长**时必须回落整文件读（拿窗口内容当"本次会话"会把上一轮的 AUTH_FAILED 误判成本轮，`OpenVPNLogTailTests` 锁的就是这条）。
