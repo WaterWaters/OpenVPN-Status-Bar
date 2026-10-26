@@ -60,4 +60,4 @@ cd VPNStatusBar
 
 ## 问题反馈
 
-- Bug / 功能建议走 [Issue](https://github.com/WaterWaters/OpenVPN-Status-Bar/issues)，用模板填写，附上 app 面板「日志」内容更利于排查。
+- Bug / 功能建议走 [Issue](https://github.com/WaterWaters/OpenVPN-Status-Bar/issues)，用模板填写，附上 app 面板「诊断」页的日志更利于排查。

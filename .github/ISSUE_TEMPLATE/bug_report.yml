@@ -35,8 +35,8 @@ body:
   - type: textarea
     id: log
     attributes:
-      label: 面板「日志」内容
-      description: app 面板 → 日志，把内容粘贴进来，方便排查
+      label: 诊断日志
+      description: 面板 →「诊断」标签页 →「复制日志」，把内容粘贴进来，方便排查
   - type: textarea
     id: extra
     attributes:
