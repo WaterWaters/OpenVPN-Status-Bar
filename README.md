@@ -1,6 +1,7 @@
 # VPNStatusBar
 
 [![Build](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml/badge.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/build.yml)
+[![Release](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/release.yml/badge.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar/actions/workflows/release.yml)
 [![macOS](https://img.shields.io/badge/macOS-13.0+-blue)](https://github.com/WaterWaters/OpenVPN-Status-Bar)
 [![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://github.com/WaterWaters/OpenVPN-Status-Bar)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -8,6 +9,8 @@
 一个 macOS 菜单栏 VPN 小工具：点一下菜单栏图标就能连接 / 断开 VPN，断线自动重连，全程无需命令行。支持任意标准 OpenVPN 配置。
 
 **内置 openvpn 引擎，开箱即用** —— 不需要安装 Homebrew，也无需手动配置任何权限。
+
+> 下载：[最新 Release](https://github.com/WaterWaters/OpenVPN-Status-Bar/releases/latest)（`VPNStatusBar-3.1.0.dmg`）
 
 ## ✨ 功能
 
@@ -22,13 +25,14 @@
 ## 系统要求
 
 - macOS 13.0+（Ventura 及以上）
-- Apple 芯片（M 系列）与 Intel 均可
+- Release 里的预编译 DMG 为 **Apple 芯片（arm64）**；Intel 机器请按「方式二」从源码构建，
+  `build-openvpn.sh` 会按本机架构编译引擎。
 
 ## 安装
 
 ### 方式一：拖拽安装（推荐）
 
-1. 打开 `VPNStatusBar-0.0.1.dmg`
+1. 从 [Releases](https://github.com/WaterWaters/OpenVPN-Status-Bar/releases/latest) 下载 `VPNStatusBar-3.1.0.dmg` 并打开
 2. 把 `VPNStatusBar.app` 拖进「应用程序（Applications）」文件夹
 3. 首次打开若提示“无法验证开发者”，见 [常见问题](#常见问题)
 
@@ -54,17 +58,26 @@ cd VPNStatusBar
 |---|---|
 | 连接 | 菜单栏图标 →「连接 VPN」 |
 | 断开 | 菜单栏图标 →「断开 VPN」 |
-| 授权引擎 / 修改配置 / 清除配置 | 面板底部「设置…」 |
-| 开关自动重连 | 面板内「断线自动重连」开关 |
-| 退出 | 菜单内「退出 VPNStatusBar」（自动断开连接） |
+| 取消卡住的连接 | 连接超过 8 秒后主按钮变为「取消连接」 |
+| 授权引擎 / 修改配置 / 清除配置 | 面板内「设置」标签页 |
+| 开关自动重连 | 「概览」标签页的「断线自动重连」开关 |
+| 发日志给管理员 | 「诊断」标签页 →「复制日志」/「打开日志文件」 |
+| 退出 | 面板底部「退出 VPNStatusBar」（自动断开连接） |
 
 图标颜色：🟢 已连接 / 🟠 连接中·重连中 / ⚪ 已断开·未配置
+
+> 键盘操作：主按钮与底部入口支持 Tab 聚焦（有蓝色焦点环），回车触发主操作。
+> 系统开启「减少动态效果」后，图标与状态点的呼吸动画自动停止。
 
 ## 安全与隐私
 
 - 密码只存**系统钥匙串（Keychain）**，不落明文文件；连接时临时生成认证文件，断开即删。
 - 内置自带的 openvpn 引擎，无需安装第三方软体。
 - “授权”仅用于以系统管理员身份建立 VPN 隧道，写完免密规则后日常使用不再需要密码。
+- 免密规则**只放行一个启动脚本**（`/usr/local/vpnstatusbar/vpn-run.sh`），它只接受
+  `validate/start/stop/status` 四个动作、引擎路径写死，并校验你的配置：含 `up`/`down`/`route-up`/
+  `plugin`/`script-security` 等能让 openvpn 以管理员身份执行外部程序的指令会被直接拒绝。
+  （旧版本允许免密运行任意参数的 openvpn，等于把管理员权限交给了任何以你身份运行的程序。）
 
 ## 常见问题
 
@@ -75,7 +88,11 @@ cd VPNStatusBar
 | 设置页显示“引擎异常” | 「设置…」→「修复并重新授权…」 |
 | 连接报错 sudo 需要密码 | 到「设置…」重新「授权 VPN…」，确保授权弹窗完成 |
 | 连接一会儿就断开 | 属正常：远端约 30 分钟强制断开一次，app 会自动重连 |
-| 点连接没反应 | 看面板「日志」，把内容发给管理员 |
+| 反复重连后停下，事件行提示“用户名或密码错误” | 凭据已失效：app 检测到 AUTH_FAILED 会停止重连（不再空转）。到「配置」→「修改当前配置…」更新密码即可 |
+| 设置页提示“检测到旧版授权规则…请重新授权一次” | 从旧版本升级后的一次性迁移：点「重新授权…」，用只放行启动脚本的新规则覆盖旧规则 |
+| 连接报错“配置包含不支持的指令（安全策略）” | 你的 `.ovpn` 里有 `up`/`plugin` 等指令。这类指令可让管理员权限执行外部程序，出于安全默认拒绝，请改用不含这些指令的配置 |
+| 想只改密码、不换配置文件 | 「配置」→「修改当前配置…」→ 直接填新密码保存（不必重新选 `.ovpn`） |
+| 点连接没反应 | 「诊断」标签页 →「复制日志」（或「打开日志文件」）后发给管理员；日志会保留历史会话，不再只留最后一次 |
 
 ## 卸载
 
@@ -85,8 +102,19 @@ cd VPNStatusBar
 
    ```bash
    sudo rm /etc/sudoers.d/vpnstatusbar
+   sudo rm -rf /usr/local/vpnstatusbar
    rm -rf ~/Library/Application\ Support/VPNStatusBar
    ```
+
+4. （从 v2 升级上来的机器）清理残留的旧免密规则。v2 时代常手工加过一条指向 Homebrew 的规则，
+   而 Homebrew 目录是用户可写的 —— 那条 `NOPASSWD` 等于把免密 root 执行权交给一个任何进程都能改写的二进制：
+
+   ```bash
+   sudo -l | grep -i openvpn        # 看是否还有 /opt/homebrew/sbin/openvpn 之类的条目
+   sudo visudo                      # 从 /etc/sudoers（或对应 sudoers.d 文件）中删除该行
+   ```
+
+   设置页检测到这类遗留规则时也会直接提示路径。
 
 ## 开发
 
@@ -97,7 +125,20 @@ cd VPNStatusBar
 ```
 
 - 修改源码后需重新 `./build.sh` 才生效（覆盖并重新签名）。
-- CI：`.github/workflows/build.yml` 在 macOS 上编译校验并产出二进制。
+- CI：`.github/workflows/build.yml` 在 macOS 上跑单测 + 编译 + 打包校验；`.github/workflows/release.yml`
+  在推送 `v*` tag 时构建内置引擎、打包 DMG 并创建 GitHub Release。
+
+### 发版
+
+1. 改 `build.sh` 的默认 `VERSION`，在 `CHANGELOG.md` 写 `## [X.Y.Z] - YYYY-MM-DD` 段落，同步 README 的下载文件名。
+2. 提交并合并到 `main`，然后打 tag 并推送：
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin main vX.Y.Z
+   ```
+
+3. Release workflow 会校验 tag 与 CHANGELOG 段落一致，产出 `VPNStatusBar-X.Y.Z.dmg` 与 `SHA256SUMS.txt`。
 
 ## 参与贡献
 
