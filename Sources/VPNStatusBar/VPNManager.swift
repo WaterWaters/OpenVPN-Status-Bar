@@ -458,10 +458,18 @@ final class VPNManager: ObservableObject {
     ///   - username: 鉴权用户名
     ///   - password: 鉴权密码（nil 表示保持原有密码）
     ///   - targetProfileId: 编辑模式传目标档案 id（原地更新）；nil 表示新建档案
-    func saveConfig(ovpnData: Data, fileName: String, username: String, password: String?, targetProfileId: String?) {
+    /// - Returns: 是否真的保存成功。失败时盘上与索引保持原状（或回滚），不会留下半个档案。
+    @discardableResult
+    func saveConfig(ovpnData: Data, fileName: String, username: String, password: String?, targetProfileId: String?) -> Bool {
         // 编辑模式由调用方显式指定目标档案，不再用“用户名是否变化”反推用户意图
         // （用户名与密码同时修改时那个判定会误算成新增，产生重复档案）
         if let id = targetProfileId, let active = profiles.first(where: { $0.id == id }) {
+            // 先写密码：钥匙串失败时，配置文件与索引都还没动，不会出现"配置新了、密码旧了"
+            if let pwd = password, !pwd.isEmpty,
+               !Keychain.savePassword(pwd, account: store.keychainAccount(for: active.id)) {
+                lastEvent = L10n.tr("event.credFailed")
+                return false
+            }
             try? ovpnData.write(to: URL(fileURLWithPath: store.ovpnPath(for: active.id)), options: .atomic)
             var updated = active
             updated.fileName = fileName
@@ -470,25 +478,22 @@ final class VPNManager: ObservableObject {
             updated.serverAddress = VPNProfile.parseServerAddress(from: String(data: ovpnData, encoding: .utf8) ?? "")
             updated.updatedAt = Date()
             store.update(updated)
-            if let pwd = password, !pwd.isEmpty {
-                if !Keychain.savePassword(pwd, account: store.keychainAccount(for: active.id)) {
-                    lastEvent = L10n.tr("event.credFailed")
-                    return
-                }
-            }
             refreshProfiles()
             status = .disconnected
             lastEvent = L10n.tr("event.profileSaved", fileName)
             loadLogTail()
-            return
+            return true
         }
         let p = store.add(ovpnData: ovpnData, fileName: fileName, username: username)
-        if let pwd = password {
-            if !Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id)) {
-                lastEvent = L10n.tr("event.credFailed")
-                return
-            }
-        } else if let legacyPwd = Keychain.loadPassword(account: legacyKeychainAccount) {
+        if let pwd = password,
+           !Keychain.savePassword(pwd, account: store.keychainAccount(for: p.id)) {
+            // 回滚刚建的档案：否则列表里会多出一个没有密码、永远连不上的配置
+            store.remove(id: p.id)
+            refreshProfiles()
+            lastEvent = L10n.tr("event.credFailed")
+            return false
+        }
+        if password == nil, let legacyPwd = Keychain.loadPassword(account: legacyKeychainAccount) {
             _ = Keychain.savePassword(legacyPwd, account: store.keychainAccount(for: p.id))
         }
         refreshProfiles()
@@ -498,6 +503,7 @@ final class VPNManager: ObservableObject {
         status = .disconnected
         lastEvent = L10n.tr("event.profileSaved", fileName)
         loadLogTail()
+        return true
     }
 
     /// 指定档案的 ovpn 内容（编辑模式下未重新选文件时复用 → 改用户名/密码不必重选文件）

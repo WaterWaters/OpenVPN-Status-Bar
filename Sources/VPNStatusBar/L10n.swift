@@ -115,6 +115,7 @@ enum L10n {
         "wizard.error.needFile": "请先选择 ovpn 文件",
         "wizard.error.read": "无法读取文件：%@",
         "wizard.error.readConfig": "读取配置文件失败",
+        "wizard.error.save": "保存失败：凭据未能写入钥匙串，请重试",
         "wizard.importTitle": "配置 VPN",
         "wizard.keepCurrent": "保留当前配置，直接修改凭据",
         "wizard.next": "下一步",

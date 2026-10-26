@@ -596,11 +596,16 @@ struct SetupWizard: View {
             return
         }
         let pass = password.isEmpty ? nil : password
-        vpn.saveConfig(ovpnData: payload.data,
-                       fileName: payload.fileName,
-                       username: username,
-                       password: pass,
-                       targetProfileId: isEdit ? editingProfileId : nil)
+        let saved = vpn.saveConfig(ovpnData: payload.data,
+                                   fileName: payload.fileName,
+                                   username: username,
+                                   password: pass,
+                                   targetProfileId: isEdit ? editingProfileId : nil)
+        guard saved else {
+            // 保存失败（钥匙串写入失败）：留在当前步骤并说明原因，绝不能显示"已保存"
+            errorText = L10n.tr("wizard.error.save")
+            return
+        }
         pickedName = payload.fileName
         step = 3
     }
