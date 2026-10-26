@@ -264,6 +264,10 @@ struct SetupWizard: View {
     @State private var username = ""
     @State private var password = ""
     @State private var errorText = ""
+    /// 配置预检（`vpn-run.sh validate`）是否通过 —— 未通过不允许进入下一步
+    @State private var validationOK = false
+    /// 连续换文件时丢弃上一次预检的迟到结果
+    @State private var validationToken = UUID()
     @State private var hover = false
     @FocusState private var backFocused: Bool
 
@@ -271,6 +275,9 @@ struct SetupWizard: View {
         if case .edit = mode { return true }
         return false
     }
+
+    /// 选完文件 + 预检通过才允许进入下一步
+    private var canContinue: Bool { !pickedName.isEmpty && validationOK }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -376,10 +383,10 @@ struct SetupWizard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            PanelActionButton(title: L10n.tr("wizard.next"), enabled: !pickedName.isEmpty) {
+            PanelActionButton(title: L10n.tr("wizard.next"), enabled: canContinue) {
                 step = 2
             }
-            .opacity(pickedName.isEmpty ? 0.45 : 1)
+            .opacity(canContinue ? 1 : 0.45)
 
             if isEdit {
                 // 修改模式：保留当前配置直接下一步
@@ -549,6 +556,20 @@ struct SetupWizard: View {
         fileSummary = summarize(content)
         username = isEdit ? vpn.username : username
         errorText = ""
+        validate(url)
+    }
+
+    /// 用 app 自带的包装脚本预检配置（不需要 root）：把"含不支持的指令"提前到选文件时说明。
+    private func validate(_ url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        validationOK = false
+        let token = UUID()
+        validationToken = token
+        vpn.validateProfileData(data) { reason in
+            guard validationToken == token else { return }   // 期间又换了文件：丢弃迟到结果
+            if let reason { errorText = reason }
+            validationOK = (reason == nil)
+        }
     }
 
     /// 从 ovpn 内容提取摘要信息
@@ -576,6 +597,8 @@ struct SetupWizard: View {
         pickedName = p.fileName
         fileSummary = vpn.profileOvpnData(id: id)
             .map { summarize(String(data: $0.data, encoding: .utf8) ?? "") } ?? ""
+        // 未重选文件时信任已有配置（它在导入时已校验过；连接时 wrapper 还会再校验一次）
+        validationOK = true
     }
 
     // MARK: - 保存

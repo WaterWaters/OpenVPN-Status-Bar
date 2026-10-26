@@ -513,6 +513,50 @@ final class VPNManager: ObservableObject {
         return (data, p.fileName)
     }
 
+    /// 用 app 内置的 root 包装脚本做配置预检（`vpn-run.sh validate`，**不需要 root**）。
+    ///
+    /// 让"配置含 up/plugin 等不支持的指令"在**选完文件**时就说清楚，而不是等到点连接才从
+    /// runner 的 stderr 里冒出来。校验逻辑与 root 侧白名单是同一份真值，不会两处漂移。
+    /// - Parameter completion: 主线程回调；`nil` 表示通过（或无法预检 —— 不阻塞导入，连接时仍会再校验一次）
+    func validateProfileData(_ data: Data, completion: @escaping (String?) -> Void) {
+        guard let wrapper = Self.resolveSupportScript(named: "vpn-run.sh") else {
+            completion(nil)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            // 临时文件必须归当前用户所有、0600（wrapper 会校验属主与权限）
+            let tmp = NSTemporaryDirectory() + "vpnstatusbar-validate-\(UUID().uuidString).ovpn"
+            defer { try? FileManager.default.removeItem(atPath: tmp) }
+            guard PrivateFile.write(String(decoding: data, as: UTF8.self), to: tmp) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+            proc.arguments = [wrapper, "validate", tmp]
+            proc.standardOutput = FileHandle.nullDevice
+            let errPipe = Pipe()
+            proc.standardError = errPipe
+            var reason: String?
+            do {
+                try proc.run()
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                if proc.terminationStatus != 0 {
+                    let text = String(data: errData, encoding: .utf8) ?? ""
+                    let firstLine = text.split(separator: "\n").first.map(String.init) ?? ""
+                    let cleaned = firstLine
+                        .replacingOccurrences(of: "❌ ", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    reason = cleaned.isEmpty ? L10n.tr("wizard.error.unsupported") : cleaned
+                }
+            } catch {
+                reason = nil      // 预检本身没能跑起来：不阻塞导入
+            }
+            DispatchQueue.main.async { completion(reason) }
+        }
+    }
+
     /// 清除配置（多配置：删除当前档案；兼容旧单文件）
     func clearConfig() {
         let fm = FileManager.default

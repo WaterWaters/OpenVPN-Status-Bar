@@ -116,6 +116,7 @@ enum L10n {
         "wizard.error.read": "无法读取文件：%@",
         "wizard.error.readConfig": "读取配置文件失败",
         "wizard.error.save": "保存失败：凭据未能写入钥匙串，请重试",
+        "wizard.error.unsupported": "配置包含不支持的指令（安全策略），请改用不含 up/down/plugin 等指令的配置",
         "wizard.importTitle": "配置 VPN",
         "wizard.keepCurrent": "保留当前配置，直接修改凭据",
         "wizard.next": "下一步",
