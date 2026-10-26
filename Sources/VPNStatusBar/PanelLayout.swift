@@ -180,38 +180,44 @@ struct LogCard: View {
     /// nil = 填满可用高度；否则只显示最后 N 行
     var maxLines: Int?
 
-    @State private var cachedLines: [String] = []
+    @State private var lines: [String] = []
     @State private var copied = false
 
+    /// 只做"取末尾 N 行"，**不截断字符**：截断交给 SwiftUI 的 lineLimit，
+    /// 否则 `.textSelection` 复制到的是被截过的假日志，排障时最要命。
     private func makeLines(from tail: String) -> [String] {
-        let lines = tail.split(separator: "\n").map(String.init)
-        let limited = maxLines.map { Array(lines.suffix($0)) } ?? Array(lines.suffix(40))
-        return limited.map { line in
-            line.count <= 54 ? line : String(line.prefix(51)) + "…"
-        }
+        let all = tail.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        return maxLines.map { Array(all.suffix($0)) } ?? Array(all.suffix(40))
     }
 
     var body: some View {
         PanelCard(title: L10n.tr("log.title"), icon: "doc.text") {
             Group {
-                if cachedLines.isEmpty {
+                if lines.isEmpty {
                     Text(L10n.tr("log.empty"))
                         .font(.system(size: Design.Font.caption, design: .monospaced))
                         .foregroundStyle(Design.ink3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    ScrollView(.vertical, showsIndicators: true) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(cachedLines.enumerated()), id: \.offset) { _, line in
-                                Text(line)
-                                    .font(.system(size: Design.Font.caption, design: .monospaced))
-                                    .foregroundStyle(Design.ink2)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: true) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                                    Text(line)
+                                        .font(.system(size: Design.Font.caption, design: .monospaced))
+                                        .foregroundStyle(Design.ink2)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .textSelection(.enabled)
+                                        .help(line)          // 截断时悬停可读全文
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id(index)
+                                }
                             }
                         }
+                        // 内容按"最后 N 行"组织、可视区只够几行 —— 不跟随就永远停在最旧的一屏
+                        .onAppear { scrollToBottom(proxy) }
+                        .onChange(of: lines) { _ in scrollToBottom(proxy) }
                     }
                 }
             }
@@ -240,16 +246,29 @@ struct LogCard: View {
                 .accessibilityLabel(L10n.tr("log.open"))
             }
         }
-        .onAppear { cachedLines = makeLines(from: vpn.logTail) }
-        .onChange(of: vpn.logTail) { tail in cachedLines = makeLines(from: tail) }
+        .onAppear { lines = makeLines(from: vpn.logTail) }
+        .onChange(of: vpn.logTail) { tail in lines = makeLines(from: tail) }
+    }
+
+    /// 滚到末尾（无动画：滚动不做动效，避免与固定高度窗口叠加出意外）
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        guard let last = lines.indices.last else { return }
+        DispatchQueue.main.async { proxy.scrollTo(last, anchor: .bottom) }
     }
 
     private func copyLog() {
-        let text = (try? String(contentsOfFile: vpn.logFile, encoding: .utf8)) ?? vpn.logTail
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        // 主线程只取路径与兜底文本，整文件读取（最多 512 KB）放后台
+        let path = vpn.logFile
+        let fallback = vpn.logTail
+        DispatchQueue.global(qos: .utility).async {
+            let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? fallback
+            DispatchQueue.main.async {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+            }
+        }
     }
 }
 
