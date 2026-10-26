@@ -7,13 +7,16 @@ SwiftPM macOS menu-bar app (`LSUIElement`), no Xcode project. Swift 5.9+, macOS 
 ## Build & Test — exact commands
 
 ```bash
+./scripts/dev.sh build             # 本地编译（自动做 SDK 回退；只有 CommandLineTools 也能过）
+./scripts/dev.sh test              # 单元测试（需要完整 Xcode 的 XCTest；CI 用这个语义）
+./scripts/dev.sh release           # 等价 ./build.sh
 swift test --package-path . --scratch-path .build          # unit tests (requires macOS SDK; fails with bare CommandLineTools — CI uses macos-latest)
 swift build -c release --package-path . --scratch-path .build  # compile only
 ./build-openvpn.sh                 # builds static self-contained openvpn → vendor/openvpn (network + ~1-2 min, cached in .build/openvpn-cache)
 ./build-openvpn.sh --rebuild       # force full rebuild
 ./build.sh                         # assembles VPNStatusBar.app + dist/ + DMG (calls swift build internally)
 ARCHS=universal ./build.sh         # dual arm64+x86_64 — requires full Xcode (xcbuild); default is native arch
-VERSION=3.1.0 ./build.sh           # override version (Info.plist + DMG name; default already 3.1.0 in build.sh)
+VERSION=3.2.0 ./build.sh           # override version (Info.plist + DMG name; default already 3.2.0 in build.sh)
 ```
 
 CI (`.github/workflows/build.yml`) on `macos-latest`: `swift test` + `swift build -c release` + a packaging job
@@ -32,9 +35,10 @@ packages the DMG on an arm64 runner, writes `SHA256SUMS.txt`, and creates the Gi
 ## Architecture
 
 - `Package.swift` — three targets: `VPNStatusBarCore` (library, `Sources/VPNStatusBarCore/`) + `VPNStatusBar` (executable, `Sources/VPNStatusBar/`, depends on Core) + test target `VPNStatusBarCoreTests`.
-- `Sources/VPNStatusBarCore/` — pure logic, no UI/I/O (`VPNStatus.swift`, `EngineAuth.swift`, `TunnelState.swift`, `TunnelConvergence.swift`, `ManagementProtocol.swift`). Keep it that way — this is what tests cover.
-- `Sources/VPNStatusBar/` — SwiftUI panel, `VPNManager` state machine, `Keychain`, `App.swift` entrypoint.
-- `Support/vpn-runner.sh` — openvpn launcher, bundled into `Contents/Resources/`. App passes `--openvpn/--ovpn/--auth/--log/--session-note`; fallback probes brew paths + sudoers. Logs are **appended** (`--log-append`): each start first writes a `--session-note` separator line, and the app only judges credential failures from the current session (`OpenVPNLog.currentSession`) — do not reintroduce truncation without revisiting that.
+- `Sources/VPNStatusBarCore/` — pure logic, no UI/I/O (`VPNStatus.swift`, `EngineAuth.swift`, `TunnelState.swift`, `TunnelConvergence.swift`, `ManagementProtocol.swift`, `LaunchTracker.swift`, `SudoPolicy.swift`, `OpenVPNSignature.swift`). Keep it that way — this is what tests cover.
+- `Sources/VPNStatusBar/` — SwiftUI panel, `VPNManager` state machine, `Keychain`, `App.swift` entrypoint。
+- `scripts/dev.sh` + `scripts/sdk.sh` — 本地开发入口与 SDK 回退判断（`build.sh` 复用同一段逻辑）。
+- `Support/vpn-runner.sh` — openvpn launcher, bundled into `Contents/Resources/`. App passes `--ovpn/--auth/--log/--session-note`（以及可选的 `--mgmt-password-file`）；引擎路径由 root 属主的 `vpn-run.sh` 固定，app 不再传 `--openvpn`。Logs are **appended** (`--log-append`): each start first writes a `--session-note` separator line, and the app only judges credential failures from the current session (`OpenVPNLog.currentSession`) — do not reintroduce truncation without revisiting that.
   **日志读取只读末尾窗口**（展示 16 KB / 凭据判定 64 KB，见 `Sources/VPNStatusBar/LogFile.swift`），切片走 `OpenVPNLog.currentSessionFromTail(_:tailIsWholeFile:)`；窗口里没有分隔行**且文件更长**时必须回落整文件读（拿窗口内容当"本次会话"会把上一轮的 AUTH_FAILED 误判成本轮，`OpenVPNLogTailTests` 锁的就是这条）。
 - `Sources/VPNStatusBar/` 高频状态一律单独发布，**不要**塞进 `VPNManager` 的 `@Published`：1 Hz 流量走 `TrafficStore`（只有 `TrafficInline` 订阅）、秒级时钟走 `TickProvider`（只有 `DurationText`/`RetryCountdown` 订阅）。挂在 `VPNManager` 上会让每个 `@EnvironmentObject` 视图（整块面板 + 菜单栏 label）跟着重算。
 - `vendor/openvpn` — gitignored static binary; `build.sh` copies it to `Contents/Resources/openvpn` if present, else warns and falls back to system openvpn.
@@ -46,12 +50,15 @@ packages the DMG on an arm64 runner, writes `SHA256SUMS.txt`, and creates the Gi
 - **UI 文案是单语言简体中文，写在代码内的表里**：`Sources/VPNStatusBar/L10n.swift` 与 `Sources/VPNStatusBarCore/L10nCore.swift`。**不要**再引入 `.lproj`/`Bundle.module`/资源 bundle —— 资源缺失或 strings 文件损坏时界面会整个退化成裸 key（如 `status.retry`），真机上出现过一次；`L10n.tr` 遇到未登记的 key 会返回 key 本身并写日志。
 - Commits: Simplified Chinese, verb-led conventional prefix (`feat:`, `fix:`, `ci:`, `docs:`). No company names in code/docs.
 - PR must pass `swift test` + `swift build -c release` per `.github/PULL_REQUEST_TEMPLATE.md`; UI changes need screenshots, connection changes need panel log.
-- `Sources/VPNStatusBarCore` must stay free of imports beyond `Foundation`/`SwiftUI` types used as value types — no process/Keychain/sudo calls.
+- `Sources/VPNStatusBarCore` must stay free of imports beyond `Foundation` (no SwiftUI, process/Keychain/sudo calls).
 
 ## Gotchas
 
 - Always pass `--package-path . --scratch-path .build` — build dir is `.build/` at repo root (also holds `openvpn-cache`/`openvpn-embed`).
-- This host has only CommandLineTools (`xcodebuild` fails). `swift test` and `ARCHS=universal` will fail locally — verify via `swift build` native or rely on CI.
+- This host has only CommandLineTools (`xcodebuild` fails), and since the macOS 27 SDK the SwiftUI macro
+  plugin is missing too — plain `swift build` fails with "self is immutable" noise.
+  Use `./scripts/dev.sh build` (it sets `SDKROOT` to an older SDK); `swift test` and `ARCHS=universal` still
+  fail locally — rely on CI.
 - `build-openvpn.sh` 按 `uname -m` 编译引擎（arm64 / x86_64），`--rebuild` 前先删 `.build/openvpn-embed`；
   `ARCHS=universal ./build.sh` 不会改变引擎架构，`build.sh` 会警告。
 - Do not commit `vendor/openvpn`, `VPNStatusBar.app/`, `dist/`, `*.dmg`, `design/`, `.build/` — all gitignored.
@@ -73,6 +80,11 @@ packages the DMG on an arm64 runner, writes `SHA256SUMS.txt`, and creates the Gi
   忙碌只靠颜色 + 无障碍文案表达）；想加持续动效，先把上面这组数复测一遍再动手。
 - 测量这类"空转能耗"的现成办法：`ps -p <pid> -o time=` 取两次差值（20–30 秒窗口）比 `top` 的瞬时值稳；
   `sample <pid> 3 -file /tmp/x.txt` 看 `Call graph` 里 `ViewGraphRootValueUpdater.render` / `NSHostingView.layout`。
+- **进程/流回调必须带启动代次**（`LaunchTracker`）：`prepareAndStart()` 开头 `invalidate()`、`startVPNProcess()`
+  开头 `begin()`；`terminationHandler`、stderr 抽干、`MgmtClient` 事件与看门狗查询结果都在主线程比对
+  `isCurrent`。没有这条，切配置 / "断开后立刻连接"时旧进程的退出会被当成"新隧道断了"，5 秒后把刚连上的
+  隧道无谓掐断重连一次。新增任何异步回调（进程退出、管道读取、socket 推送、后台查询）时，
+  先问一句"它属于哪一次启动"。
 - **状态机不允许出现"busy 但没有在飞的动作"**：`connecting/reconnecting` 必须至少满足其一 —— 有 openvpn 进程、
   启动序列在飞（`isStarting` 且在 `TunnelConvergence.startGrace` 内）、重试已武装（`retryTimer != nil`）。
   收敛兜底在 `VPNManager.refreshState` 里按 `TunnelConvergence.verdict`（Core，带单测）执行；

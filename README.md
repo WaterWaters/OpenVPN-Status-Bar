@@ -10,7 +10,7 @@
 
 **内置 openvpn 引擎，开箱即用** —— 不需要安装 Homebrew，也无需手动配置任何权限。
 
-> 下载：[最新 Release](https://github.com/WaterWaters/OpenVPN-Status-Bar/releases/latest)（`VPNStatusBar-3.1.0.dmg`）
+> 下载：[最新 Release](https://github.com/WaterWaters/OpenVPN-Status-Bar/releases/latest)（`VPNStatusBar-3.2.0.dmg`）
 
 ## ✨ 功能
 
@@ -32,7 +32,7 @@
 
 ### 方式一：拖拽安装（推荐）
 
-1. 从 [Releases](https://github.com/WaterWaters/OpenVPN-Status-Bar/releases/latest) 下载 `VPNStatusBar-3.1.0.dmg` 并打开
+1. 从 [Releases](https://github.com/WaterWaters/OpenVPN-Status-Bar/releases/latest) 下载 `VPNStatusBar-3.2.0.dmg` 并打开
 2. 把 `VPNStatusBar.app` 拖进「应用程序（Applications）」文件夹
 3. 首次打开若提示“无法验证开发者”，见 [常见问题](#常见问题)
 
@@ -40,8 +40,10 @@
 
 ```bash
 cd VPNStatusBar
-./build-openvpn.sh   # 构建内置 openvpn 引擎（需联网 + 编译，约 1-2 分钟）
-./build.sh           # 编译并打包 .app / DMG
+./scripts/dev.sh build   # 编译（只有 CommandLineTools 也能过，自动回退 SDK）
+./scripts/dev.sh test    # 单元测试（需要完整 Xcode）
+./build-openvpn.sh       # 构建内置 openvpn 引擎（需联网 + 编译，约 1-2 分钟）
+./build.sh               # 编译并打包 .app / DMG
 ```
 
 ## 首次使用（约 1 分钟）
@@ -59,9 +61,10 @@ cd VPNStatusBar
 | 连接 | 菜单栏图标 →「连接 VPN」 |
 | 断开 | 菜单栏图标 →「断开 VPN」 |
 | 取消卡住的连接 | 连接超过 8 秒后主按钮变为「取消连接」 |
-| 授权引擎 / 修改配置 / 清除配置 | 面板内「设置」标签页 |
-| 开关自动重连 | 「概览」标签页的「断线自动重连」开关 |
-| 发日志给管理员 | 「诊断」标签页 →「复制日志」/「打开日志文件」 |
+| 授权引擎 / 偏好设置 | 面板内「设置」标签页 |
+| 新增 / 修改 / 删除配置 | 面板内「配置」标签页 |
+| 开关自动重连 | 面板底部的「自动重连」开关 |
+| 发日志给管理员 | 「概览」标签页的日志卡 →「复制日志」/「打开日志文件」 |
 | 退出 | 面板底部「退出 VPNStatusBar」（自动断开连接） |
 
 图标颜色：🟢 已连接 / 🟠 连接中·重连中 / ⚪ 已断开·未配置
@@ -88,11 +91,11 @@ cd VPNStatusBar
 | 设置页显示“引擎异常” | 「设置」标签页 →「修复并重新授权…」 |
 | 连接报错 sudo 需要密码 | 到「设置」标签页重新「授权 VPN…」，确保授权弹窗完成 |
 | 连接一会儿就断开 | 属正常：远端约 30 分钟强制断开一次，app 会自动重连 |
-| 反复重连后停下，事件行提示“用户名或密码错误” | 凭据已失效：app 检测到 AUTH_FAILED 会停止重连（不再空转）。到「配置」→「修改当前配置…」更新密码即可 |
+| 反复重连后停下，事件行提示“用户名或密码错误” | 凭据已失效：app 检测到 AUTH_FAILED 会停止重连（不再空转）。到「配置」→「修改」更新密码即可 |
 | 设置页提示“检测到旧版授权规则…请重新授权一次” | 从旧版本升级后的一次性迁移：点「重新授权…」，用只放行启动脚本的新规则覆盖旧规则 |
 | 连接报错“配置包含不支持的指令（安全策略）” | 你的 `.ovpn` 里有 `up`/`plugin` 等指令。这类指令可让管理员权限执行外部程序，出于安全默认拒绝，请改用不含这些指令的配置 |
-| 想只改密码、不换配置文件 | 「配置」→「修改当前配置…」→ 直接填新密码保存（不必重新选 `.ovpn`） |
-| 点连接没反应 | 「诊断」标签页 →「复制日志」（或「打开日志文件」）后发给管理员；日志会保留历史会话，不再只留最后一次 |
+| 想只改密码、不换配置文件 | 「配置」→「修改」→ 直接填新密码保存（不必重新选 `.ovpn`） |
+| 点连接没反应 | 「概览」日志卡 →「复制日志」（或「打开日志文件」）后发给管理员；日志会保留历史会话，不再只留最后一次 |
 
 ## 卸载
 

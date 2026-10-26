@@ -5,7 +5,7 @@ set -euo pipefail
 APP_NAME="VPNStatusBar"
 # 版本号唯一来源：Info.plist 与 DMG 文件名都取自这里；发版时改这里，并打同名 tag（vX.Y.Z）。
 # CI 发版（.github/workflows/release.yml）用 tag 值覆盖它，并校验 CHANGELOG 有对应段落。
-VERSION="${VERSION:-3.1.0}"
+VERSION="${VERSION:-3.2.0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
@@ -24,22 +24,18 @@ fi
 
 # SDK 兼容：macOS 27 起 @State/@Environment 等改由宏实现，而宏的实现插件 SwiftUIMacros 只随
 # 完整 Xcode 提供，只装 CommandLineTools 时会编译失败（报错是一堆 "self is immutable"）。
-# 此时自动回退到仍用 propertyWrapper 实现的较旧 SDK —— 本项目不依赖新宏，编译/运行行为不变。
-if [ -z "${SDKROOT:-}" ] && [ ! -e "$(xcode-select -p)/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ]; then
-    for sdk in $(ls -dr /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null); do
-        [ -d "$sdk" ] || continue
-        if ! grep -q "macro State" \
-            "$sdk"/System/Library/Frameworks/SwiftUICore.framework/Versions/A/Modules/SwiftUICore.swiftmodule/*.swiftinterface \
-            2>/dev/null; then
-            export SDKROOT="$sdk"
-            echo "    ⚠️ 工具链缺 SwiftUIMacros 插件（该插件随完整 Xcode 提供）；回退 SDKROOT=$(basename "$sdk")"
-            break
-        fi
-    done
-    if [ -z "${SDKROOT:-}" ]; then
-        echo "    ❌ 未找到可用的旧 SDK。请安装完整 Xcode，或手动指定 SDKROOT=/path/to/MacOSX*.sdk"
-        exit 1
+# 判断逻辑与 scripts/dev.sh 共用（scripts/sdk.sh），避免两处漂移。
+# shellcheck source=scripts/sdk.sh
+source "$SCRIPT_DIR/scripts/sdk.sh"
+SDK_FALLBACK="$(vpnstatusbar_fallback_sdkroot)" && SDK_FALLBACK_OK=1 || SDK_FALLBACK_OK=0
+if [ "$SDK_FALLBACK_OK" -eq 1 ]; then
+    if [ -n "$SDK_FALLBACK" ]; then
+        export SDKROOT="$SDK_FALLBACK"
+        echo "    ⚠️ 工具链缺 SwiftUIMacros 插件（该插件随完整 Xcode 提供）；回退 SDKROOT=$(basename "$SDK_FALLBACK")"
     fi
+elif vpnstatusbar_needs_sdk_fallback; then
+    echo "    ❌ 未找到可用的旧 SDK。请安装完整 Xcode，或手动指定 SDKROOT=/path/to/MacOSX*.sdk"
+    exit 1
 fi
 
 swift build -c release \
@@ -197,9 +193,10 @@ cat > "$DIST_DIR/使用说明.md" <<'MD'
 | 连接 | 菜单栏图标 → 「连接 VPN」 |
 | 断开 | 菜单栏图标 → 「断开 VPN」 |
 | 取消卡住的连接 | 连接超过 8 秒后主按钮变「取消连接」 |
-| 授权引擎 / 修改配置 / 清除配置 | 面板「设置」标签页 |
-| 自动重连开关 | 「概览」标签页的「断线自动重连」 |
-| 发日志给管理员 | 「诊断」标签页 → 「复制日志」/「打开日志文件」 |
+| 授权引擎 / 偏好设置 | 面板「设置」标签页 |
+| 新增 / 修改 / 删除配置 | 面板「配置」标签页 |
+| 自动重连开关 | 面板底部的「自动重连」 |
+| 发日志给管理员 | 「概览」日志卡 → 「复制日志」/「打开日志文件」 |
 
 图标颜色：🟢 已连接 / 🟠 连接中·重连中 / ⚪ 已断开·未配置
 
@@ -221,8 +218,8 @@ cat > "$DIST_DIR/使用说明.md" <<'MD'
 | 点连接提示"引擎未授权" | 面板「设置」标签页 →「授权 VPN…」→ 输一次开机密码 |
 | 设置显示"引擎异常" | 「设置」标签页 →「修复并重新授权…」（重装引擎并补授权） |
 | 连接报错 sudo 需要密码 | 到「设置」标签页重新「授权 VPN…」，确保授权弹窗完成 |
-| 反复重连后停下，事件行提示"用户名或密码错误" | app 检测到 AUTH_FAILED 已停止重连：到「配置」标签页 →「修改当前配置…」更新密码（不必重选 .ovpn） |
-| 点连接没反应 | 「诊断」标签页 → 「复制日志」后反馈（日志保留历史会话） |
+| 反复重连后停下，事件行提示"用户名或密码错误" | app 检测到 AUTH_FAILED 已停止重连：到「配置」标签页 →「修改」更新密码（不必重选 .ovpn） |
+| 点连接没反应 | 「概览」日志卡 → 「复制日志」后反馈（日志保留历史会话） |
 MD
 
 echo "✅ 分发包已生成: $DIST_DIR"
