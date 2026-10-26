@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Swift 版本
         run: swift --version
@@ -31,7 +31,7 @@ jobs:
       contents: read
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Swift 版本
         run: swift --version
@@ -47,7 +47,7 @@ jobs:
           file "$BIN"
 
       - name: 上传二进制产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VPNStatusBar-bin
           path: .build/release/VPNStatusBar
@@ -63,7 +63,7 @@ jobs:
       contents: read
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Swift 版本
         run: swift --version
@@ -124,7 +124,7 @@ jobs:
       contents: read
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 构建静态引擎
         run: ./build-openvpn.sh
