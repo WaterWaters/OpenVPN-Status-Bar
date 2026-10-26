@@ -28,10 +28,10 @@ final class MgmtClient {
     private let log = Logger(subsystem: "io.vpnstatusbar", category: "mgmt")
     private let queue = DispatchQueue(label: "vpnstatusbar.mgmtclient")
 
-    /// 事件回调（主线程）
-    var onEvent: ((ManagementEvent) -> Void)?
-    /// 连接状态回调（主线程）
-    var onStateChange: ((State) -> Void)?
+    /// 事件回调（主线程）。第二个参数是本次连接的代次：调用方据此丢弃上一次启动遗留的推送。
+    var onEvent: ((ManagementEvent, UInt64) -> Void)?
+    /// 连接状态回调（主线程）。同样携带代次。
+    var onStateChange: ((State, UInt64) -> Void)?
 
     // 以下状态只在 queue 上访问
     private var fd: Int32 = -1
@@ -44,15 +44,19 @@ final class MgmtClient {
     private var backoff: TimeInterval = 1
     private var retry: DispatchWorkItem?
     private var state: State = .idle
+    /// 由上层（VPNManager）给出的启动代次：只做透传，本类型不解释它
+    private var generation: UInt64 = 0
 
     /// 单行上限：防止异常对端不带换行地灌数据把内存撑大
     private let maxPendingBytes = 64 * 1024
 
     // MARK: - 对外接口
 
-    func start(password: String?) {
+    func start(password: String?, generation: UInt64) {
         queue.async {
             self.password = password
+            // 即使连接已经在跑也要更新代次：后续事件必须带当前代次，否则会被上层当成过期推送丢掉。
+            self.generation = generation
             guard !self.shouldRun else { return }
             self.shouldRun = true
             self.backoff = 1
@@ -61,13 +65,21 @@ final class MgmtClient {
     }
 
     func stop() {
-        queue.async {
-            self.shouldRun = false
-            self.retry?.cancel()
-            self.retry = nil
-            self.closeSocket()
-            self.setState(.idle)
-        }
+        queue.async { self.stopLocked() }
+    }
+
+    /// 同步关流：保证"探测残留实例 / 启动新进程"时接口确实已经空出来
+    /// （接口同时只服务一个客户端）。**只能在主线程调用**，在 queue 上调用会自锁。
+    func stopAndWait() {
+        queue.sync { self.stopLocked() }
+    }
+
+    private func stopLocked() {
+        shouldRun = false
+        retry?.cancel()
+        retry = nil
+        closeSocket()
+        setState(.idle)
     }
 
     /// 通过常驻连接发命令（调用方需先判断 `isStreaming`，否则走一次性连接兜底）
@@ -219,7 +231,8 @@ final class MgmtClient {
     }
 
     private func forward(_ event: ManagementEvent) {
-        DispatchQueue.main.async { [weak self] in self?.onEvent?(event) }
+        let gen = generation
+        DispatchQueue.main.async { [weak self] in self?.onEvent?(event, gen) }
     }
 
     private func write(_ command: String) {
@@ -278,6 +291,7 @@ final class MgmtClient {
     private func setState(_ new: State) {
         guard state != new else { return }
         state = new
-        DispatchQueue.main.async { [weak self] in self?.onStateChange?(new) }
+        let gen = generation
+        DispatchQueue.main.async { [weak self] in self?.onStateChange?(new, gen) }
     }
 }

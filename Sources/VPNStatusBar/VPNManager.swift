@@ -264,6 +264,8 @@ final class VPNManager: ObservableObject {
     private var desiredConnected = false
     /// 是否为手动断开（避免触发自动重连）
     private var manualDisconnect = false
+    /// 启动代次：丢弃上一次启动遗留的进程退出 / stderr / management 推送
+    private var launch = LaunchTracker()
 
     /// management 常驻连接：openvpn 主动推送状态/流量，替代每 2 秒轮询
     private let mgmt = MgmtClient()
@@ -341,9 +343,12 @@ final class VPNManager: ObservableObject {
         // 延迟非关键任务，避免阻塞启动首帧
         updateWatchdog()
         // management 常驻连接：推送状态/流量（回调在主线程）
-        mgmt.onEvent = { [weak self] event in self?.handleManagementEvent(event) }
-        mgmt.onStateChange = { [weak self] state in
-            self?.mgmtStreaming = (state == .streaming)
+        mgmt.onEvent = { [weak self] event, generation in
+            self?.handleManagementEvent(event, generation: generation)
+        }
+        mgmt.onStateChange = { [weak self] state, generation in
+            guard let self = self, self.launch.isCurrent(generation) else { return }
+            self.mgmtStreaming = (state == .streaming)
         }
         // 网络路径变化（换 Wi-Fi / 唤醒）→ 立刻收敛，不再傻等退避倒计时
         NetworkMonitor.shared.onPathChange = { [weak self] in self?.handleNetworkPathChange() }
@@ -513,7 +518,8 @@ final class VPNManager: ObservableObject {
         let fm = FileManager.default
         manualDisconnect = true
         desiredConnected = false
-        signalTerminate()
+        launch.invalidate()
+        signalTerminateSync()
         mgmt.stop()
         terminateProcess()
         process = nil
@@ -619,8 +625,8 @@ final class VPNManager: ObservableObject {
         prepareAndStart()
     }
 
-    /// 启动序列：先清理上次异常退出残留的 openvpn 实例（否则 management 端口被占，新实例无法启动），
-    /// 再拉起进程。整段放在后台 —— 残留清理要等旧实例让出端口 1.5s，放主线程会把面板冻住。
+    /// 启动序列：先等旧实例让出 management 端口（否则新实例绑定会失败），再拉起进程。
+    /// 整段放在后台 —— 等待最长 3 秒，放主线程会把面板冻住。
     private func prepareAndStart() {
         retryTimer?.invalidate()
         retryTimer = nil
@@ -629,14 +635,17 @@ final class VPNManager: ObservableObject {
         if status != .connected { status = .connecting }
         isStarting = true
         startingAt = Date()
-        // 先断开常驻推送：它占着 management 接口（同时只服务一个客户端），
-        // 不释放的话下面探测残留实例会连不上
-        mgmt.stop()
+        // 从此刻起，旧进程的退出事件、旧 management 流的推送一律作废：
+        // 下面的"等端口释放"可能持续几秒，期间旧进程退出不能触发自动重连
+        //（否则新隧道连上约 5 秒后会被无谓掐断重连一次 —— 切配置时最明显）。
+        launch.invalidate()
+        // 先同步断开常驻推送：它占着 management 接口（同时只服务一个客户端），
+        // 不释放的话下面探测残留实例会连不上。
+        mgmt.stopAndWait()
         let logPath = logFile
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let hadStale = self.sendOneShotCommand(ManagementProtocol.terminateCommand) != nil
-            if hadStale { Thread.sleep(forTimeInterval: 1.5) }
+            let hadStale = self.waitForManagementPortFree()
             // 日志轮转（整文件读 + 写回）挪到后台，且发生在任何进程拉起之前，不会和 runner 抢文件
             Self.rotateLogIfNeeded(atPath: logPath)
             DispatchQueue.main.async {
@@ -661,6 +670,8 @@ final class VPNManager: ObservableObject {
         }
         manualDisconnect = true
         desiredConnected = false
+        // 主动断开：旧进程退出事件从此作废，否则它会被当成"隧道意外断开"再触发重连
+        launch.invalidate()
         retryTimer?.invalidate()
         retryTimer = nil
         retryDeadline = nil
@@ -670,11 +681,11 @@ final class VPNManager: ObservableObject {
         lastTrafficSample = nil
         status = .disconnected
         lastEvent = L10n.tr("event.disconnecting")
-        // 优先通过 openvpn management 接口优雅退出（无需 root 权限）
-        if !signalTerminate() {
-            // 兜底：直接终止进程（对 root 属主进程可能因权限失败）
-            terminateProcess()
-        }
+        // 优先通过 openvpn management 接口优雅退出（无需 root 权限）。
+        // 不在主线程等回执：走流时立即返回，走一次性连接时交给后台（最长 3 秒，不能冻住面板）。
+        signalTerminateAsync()
+        // 兜底：直接终止进程（对 root 属主进程可能因权限失败，尽力而为）
+        terminateProcess()
         mgmt.stop()
         process = nil
         cleanupAuthFile()
@@ -689,7 +700,9 @@ final class VPNManager: ObservableObject {
         statusTimer?.invalidate()
         manualDisconnect = true
         desiredConnected = false
-        signalTerminate()
+        launch.invalidate()
+        // 退出路径允许阻塞（≤3 秒）：必须确保进程被收掉，不能"发完就走"
+        signalTerminateSync()
         mgmt.stop()
         terminateProcess()
         cleanupAuthFile()
@@ -702,6 +715,8 @@ final class VPNManager: ObservableObject {
         retryTimer = nil
         isWaitingRetry = false
         cleanupAuthFile()
+        // 本次启动的代次：进程退出、stderr、management 推送都带着它回来
+        let generation = launch.begin()
 
         // 由 app 生成 auth 文件（用户名 + Keychain 密码），0600 权限
         guard writeAuthFile() else {
@@ -739,9 +754,12 @@ final class VPNManager: ObservableObject {
         let errPipe = Pipe()
         proc.standardError = errPipe
         proc.terminationHandler = { [weak self] _ in
+            // 后台线程：先把管道抽干 —— 否则子进程（openvpn）往 stderr 写满 64 KB 会永久阻塞
+            let stderrText = Self.drainText(errPipe, limit: 8192)
             DispatchQueue.main.async {
-                self?.captureRunnerError(errPipe)
-                self?.handleProcessExit()
+                guard let self = self, self.launch.isCurrent(generation) else { return }
+                self.applyRunnerError(stderrText)
+                self.handleProcessExit()
             }
         }
 
@@ -754,7 +772,7 @@ final class VPNManager: ObservableObject {
             }
             lastEvent = L10n.tr("event.openvpnStarted")
             // 常驻推送：openvpn 绑定 management 端口略晚于进程启动，客户端会自己重试
-            mgmt.start(password: hasMgmtPassword ? mgmtPassword : nil)
+            mgmt.start(password: hasMgmtPassword ? mgmtPassword : nil, generation: generation)
             // 启动后立即读一次日志
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.loadLogTail()
@@ -845,16 +863,48 @@ final class VPNManager: ObservableObject {
         return info.state == .unknown ? nil : info
     }
 
-    /// 停止隧道：有常驻流就走流（接口同时只服务一个客户端，另开连接会被拒），
-    /// 没有流时用一次性连接兜底 —— 停隧道的能力不依赖流的健康。
+    /// 停止隧道（断开路径）：有常驻流就走流，没有流时把一次性连接丢到后台。
+    /// 不在主线程等回执 —— 接口卡住时会阻塞最长 3 秒（面板跟着冻住）。
+    private func signalTerminateAsync() {
+        if mgmt.isStreaming {
+            mgmt.send(ManagementProtocol.terminateCommand)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            _ = self?.sendOneShotCommand(ManagementProtocol.terminateCommand)
+        }
+    }
+
+    /// 停止隧道（退出路径）：允许阻塞，确保 SIGTERM 真的发出去。
     /// 返回是否至少把 SIGTERM 发出去了。
     @discardableResult
-    private func signalTerminate() -> Bool {
+    private func signalTerminateSync() -> Bool {
         if mgmt.isStreaming {
             mgmt.send(ManagementProtocol.terminateCommand)
             return true
         }
         return sendOneShotCommand(ManagementProtocol.terminateCommand) != nil
+    }
+
+    /// 等旧实例让出 management 端口，再允许拉起新进程。
+    ///
+    /// 为什么用"端口是否释放"而不是固定睡眠：端口是 openvpn 生存期内独占的资源，
+    /// 也是新实例启动时会绑定的同一个资源 —— 它释放了才说明可以启动。
+    /// 健康路径（从没跑过 openvpn / 已经退干净）第一次探测就会失败并立即返回，不引入额外延迟。
+    /// - Returns: 是否曾发现残留实例（用于事件行提示）
+    private func waitForManagementPortFree(timeout: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var sawStale = false
+        while Date() < deadline {
+            // 连不上 = 端口已释放（或本来就没人监听）→ 可以启动
+            guard sendOneShotCommand(ManagementProtocol.terminateCommand) != nil else { return sawStale }
+            sawStale = true
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if sawStale {
+            stateLog.notice("旧实例在 \(timeout, privacy: .public)s 内未让出 management 端口，继续启动")
+        }
+        return sawStale
     }
 
     /// 网络可用性变化（主线程回调）：只在"期望连接但没连上"时立刻重试。
@@ -869,7 +919,9 @@ final class VPNManager: ObservableObject {
     }
 
     /// management 推送事件（主线程回调）
-    private func handleManagementEvent(_ event: ManagementEvent) {
+    private func handleManagementEvent(_ event: ManagementEvent, generation: UInt64) {
+        // 上一次启动遗留的推送（含断流后仍在队列里的那几条）不能在本次启动里生效
+        guard launch.isCurrent(generation) else { return }
         switch event {
         case .state(let info):
             // 推送的状态直接喂给既有状态机（与轮询走同一条收敛路径）
@@ -1042,10 +1094,13 @@ final class VPNManager: ObservableObject {
         // 2) 推送不可用时才做一次性查询（常驻推送正常时状态由 >STATE: 驱动，不需要轮询）
         let needsTunnelQuery = desired && procRunning && !mgmt.isStreaming
         guard needsTunnelQuery else { return }
+        let generation = launch.current
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let tunnelInfo = self?.queryTunnelInfo()
             DispatchQueue.main.async { [weak self] in
-                self?.applyRefresh(tunnelInfo: tunnelInfo, procRunning: procRunning, desired: desired, currentStatus: currentStatus)
+                // 查询期间用户可能已经开始下一次启动：结果已过期，不能拿它推进状态
+                guard let self = self, self.launch.isCurrent(generation) else { return }
+                self.applyRefresh(tunnelInfo: tunnelInfo, procRunning: procRunning, desired: desired, currentStatus: currentStatus)
             }
         }
     }
@@ -1054,6 +1109,8 @@ final class VPNManager: ObservableObject {
     /// 只维护状态与计时器，**不改 `desiredConnected`**（用户意图由 connect/disconnect 负责），
     /// 否则会把"用户还想连"的语义弄丢、让重连彻底停摆。
     private func convergeToDisconnected(reason: String) {
+        // 收敛即主动中断：残留进程随后的退出事件不得再触发重连
+        launch.invalidate()
         retryTimer?.invalidate()
         retryTimer = nil
         retryDeadline = nil
@@ -1103,17 +1160,22 @@ final class VPNManager: ObservableObject {
 
     // MARK: - 辅助
 
-    /// runner 启动失败时读取 stderr，写入日志并反映到事件行（不再吞错误）
-    private func captureRunnerError(_ pipe: Pipe) {
+    /// 后台线程：抽干 stderr 管道（限长，避免异常输出撑爆日志/内存）
+    private static func drainText(_ pipe: Pipe, limit: Int) -> String {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let text = String(data: data, encoding: .utf8)?
+        guard var text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty else { return }
+              !text.isEmpty else { return "" }
+        if text.count > limit { text = String(text.prefix(limit)) + "…" }
+        return text
+    }
 
+    /// 主线程：runner 启动失败的 stderr 反映到事件行并追加进日志（不再吞错误）
+    private func applyRunnerError(_ text: String) {
+        guard !text.isEmpty else { return }
         // 取第一行错误信息（去掉 ❌ 前缀）作事件
         if let firstLine = text.split(separator: "\n").first {
-            let msg = String(firstLine).replacingOccurrences(of: "❌ ", with: "")
-            lastEvent = msg
+            lastEvent = String(firstLine).replacingOccurrences(of: "❌ ", with: "")
         }
         // 完整输出追加到日志文件，供「日志」查看
         if let handle = FileHandle(forWritingAtPath: logFile) {
