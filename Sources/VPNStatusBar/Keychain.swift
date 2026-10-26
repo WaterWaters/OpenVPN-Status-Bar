@@ -11,8 +11,9 @@ enum Keychain {
     static let service = "io.vpnstatusbar"
     static let legacyService = "local.zhongtang.vpnstatusbar"
 
-    /// 进程内缓存，避免启动期频繁 IPC
-    private static var cache: [String: String?] = [:]
+    /// 进程内缓存，避免启动期频繁 IPC。
+    /// 并发约定：只允许通过下面的 `cacheQueue` 串行访问（`nonisolated(unsafe)` 是把这个约定显式声明出来）
+    nonisolated(unsafe) private static var cache: [String: String?] = [:]
     private static let cacheQueue = DispatchQueue(label: "vpn.keychain.cache")
 
     static func cachedPassword(account: String) -> String? {

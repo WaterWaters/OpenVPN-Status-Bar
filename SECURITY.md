@@ -22,9 +22,14 @@
 
 ## 安全说明
 
-本项目为内部/个人工具，会请求**一次性系统管理员授权**以创建 VPN 隧道，并写入 `sudoers` 免密规则指向内置的 openvpn 引擎路径：
-
-- 授权仅用于 `/usr/local/vpnstatusbar/openvpn` 这一条精确路径，不开放任意命令。
+本项目为内部/个人工具，会请求**一次性系统管理员授权**，把内置 openvpn 与一个**启动包装脚本**安装到 `/usr/local/vpnstatusbar/`，
+并写入一条 sudoers 免密规则 —— **规则只放行包装脚本**（`vpn-run.sh`），不是 openvpn 二进制本身。
+该脚本：只接受 `validate/start/stop/status` 四个动作；引擎路径写死；要求配置与认证文件属于调用者、
+非组/其他可写；并用指令白名单拒绝 `up`/`down`/`route-up`/`tls-verify`/`plugin`/`script-security`/
+`daemon`/`writepid`/`user`/`log-append`/`management` 等指令 —— 这些指令能让 openvpn 以管理员身份
+执行外部程序或改变进程行为。任何以你的用户身份运行的进程因此**不再能借这条规则获得 root**。
+（残余风险：同用户身份的进程仍可读取你自己的配置文件与临时认证文件、并可对隧道发信号 —— 前者是
+必然，后者已由 management 接口的随机密码限制在"同用户"范围内。）
 - 凭据密码仅存 macOS Keychain，不落明文文件；连接时临时生成、断开即删。
 - 内置 openvpn 引擎为静态自包含构建，无外部 dylib 依赖。
 

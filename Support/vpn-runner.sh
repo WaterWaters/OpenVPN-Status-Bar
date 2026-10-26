@@ -1,97 +1,45 @@
 #!/usr/bin/env bash
-# VPN 启动脚本 v3 — 内置自包含 openvpn 引擎（由 VPNStatusBar.app 调用）
+# vpn-runner.sh — app 侧的启动器（以普通用户身份运行，由 VPNStatusBar.app 调用）
+#
+# 职责边界（v4 起，配合 sudoers 收严）：
+#   - 这里只做"用户侧"的事：参数解析、预检、把参数交给 root 属主的包装脚本；
+#   - 真正的 openvpn 参数拼装、配置指令白名单校验、引擎路径，都在
+#     /usr/local/vpnstatusbar/vpn-run.sh（root:wheel，sudoers 只放行它）里。
+#   这样权限面收窄到那一个脚本，而本脚本随 app 更新即可（无需重新授权）。
 #
 # 用法：
-#   vpn-runner.sh --openvpn <引擎路径> --ovpn <配置路径> --auth <认证文件路径> [--log <日志路径>]
-#
-# v3 变化：openvpn 静态编译打进 app，首次授权时同步到稳定路径
-#          /usr/local/vpnstatusbar/openvpn 并写入 sudoers 免密。
-#          脚本用 --openvpn 直接指定该引擎，不再要求 brew 安装。
-# 兼容：不传 --openvpn 时回退旧探测（brew 多路径 + 同目录 dev-ai.ovpn/.user）。
+#   vpn-runner.sh --ovpn <配置> --auth <认证文件> --log <日志> [--session-note <一行>] [--mgmt-password-file <文件>]
 set -euo pipefail
 
-BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+WRAPPER="/usr/local/vpnstatusbar/vpn-run.sh"
 
-# ---------- 参数解析 ----------
-OPENVPN_PATH=""
 CONFIG_FILE=""
 AUTH_FILE=""
 LOG_FILE=""
+SESSION_NOTE=""
+MGMT_PASSWORD_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --openvpn) OPENVPN_PATH="$2"; shift 2 ;;
-    --ovpn)    CONFIG_FILE="$2"; shift 2 ;;
-    --auth)    AUTH_FILE="$2"; shift 2 ;;
-    --log)     LOG_FILE="$2"; shift 2 ;;
+    --ovpn)                CONFIG_FILE="${2:-}"; shift 2 ;;
+    --auth)                AUTH_FILE="${2:-}"; shift 2 ;;
+    --log)                 LOG_FILE="${2:-}"; shift 2 ;;
+    --session-note)        SESSION_NOTE="${2:-}"; shift 2 ;;
+    --mgmt-password-file)  MGMT_PASSWORD_FILE="${2:-}"; shift 2 ;;
+    --openvpn)             shift 2 ;;   # 历史参数：引擎路径现在由包装脚本固定，这里忽略
     *) shift ;;
   esac
 done
 
-# ---------- 探测 openvpn（优先 --openvpn，回退探测）----------
-OPENVPN=""
-if [ -n "$OPENVPN_PATH" ] && [ -x "$OPENVPN_PATH" ]; then OPENVPN="$OPENVPN_PATH"; fi
-if [ -z "$OPENVPN" ]; then
-  list_openvpn_candidates() {
-    local p
-    for p in \
-        /usr/local/vpnstatusbar/openvpn \
-        /opt/homebrew/sbin/openvpn \
-        /usr/local/sbin/openvpn \
-        /opt/homebrew/opt/openvpn/sbin/openvpn \
-        /usr/local/opt/openvpn/sbin/openvpn \
-        /usr/local/bin/openvpn \
-        /usr/sbin/openvpn; do
-      [ -x "$p" ] && echo "$p"
-    done
-    command -v openvpn 2>/dev/null || true
-  }
-  for c in $(list_openvpn_candidates); do
-    if sudo -n -l "$c" >/dev/null 2>&1; then OPENVPN="$c"; break; fi
-  done
-  [ -z "$OPENVPN" ] && OPENVPN="$(list_openvpn_candidates | head -1)"
-fi
-
-if [ -z "$OPENVPN" ]; then
-  echo "❌ 未找到 openvpn 可执行文件。请在 app 设置中授权 VPN 引擎。" >&2
-  exit 1
-fi
-
-if ! sudo -n -l "$OPENVPN" >/dev/null 2>&1; then
-  echo "❌ openvpn（$OPENVPN）缺少 sudo 免密权限。请在 app 设置中「授权 VPN…」。" >&2
-  exit 1
-fi
-
-# ---------- 兼容旧调用（无 --ovpn/--auth 时读同目录文件）----------
-if [ -z "$CONFIG_FILE" ] && [ -f "$BASE_DIR/dev-ai.ovpn" ]; then CONFIG_FILE="$BASE_DIR/dev-ai.ovpn"; fi
-if [ -z "$AUTH_FILE" ] && [ -f "$BASE_DIR/.user" ]; then
-  # shellcheck disable=SC1090
-  source "$BASE_DIR/.user"
-  if [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ]; then
-    umask 077
-    AUTH_FILE="$BASE_DIR/.auth.tmp"
-    cat > "$AUTH_FILE" <<EOF
-$USERNAME
-$PASSWORD
-EOF
-    chmod 600 "$AUTH_FILE"
-  fi
-fi
-
+[ -x "$WRAPPER" ] || { echo "❌ 未安装启动包装脚本（$WRAPPER）。请在 app 设置里「授权 VPN…」。" >&2; exit 1; }
 [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ] || { echo "❌ 找不到配置文件（--ovpn）" >&2; exit 1; }
 [ -n "$AUTH_FILE" ] && [ -f "$AUTH_FILE" ] || { echo "❌ 找不到认证文件（--auth）" >&2; exit 1; }
-[ -n "$LOG_FILE" ] || LOG_FILE="$BASE_DIR/vpn.log"
+[ -n "$LOG_FILE" ] || LOG_FILE="$HOME/Library/Application Support/VPNStatusBar/vpn.log"
 
-rm -f "$LOG_FILE"
-touch "$LOG_FILE"
-chmod 644 "$LOG_FILE"
+# 先本地跑一次白名单校验（不需要 root）：危险配置在弹提权之前就给出明确原因
+"$WRAPPER" validate "$CONFIG_FILE" >&2 || exit 1
 
-exec sudo -n "$OPENVPN" \
-    --config "$CONFIG_FILE" \
-    --auth-user-pass "$AUTH_FILE" \
-    --connect-retry 5 \
-    --connect-retry-max 0 \
-    --ping 15 \
-    --ping-restart 60 \
-    --auth-nocache \
-    --log "$LOG_FILE" \
-    --management 127.0.0.1 7505
+ARGS=(start --ovpn "$CONFIG_FILE" --auth "$AUTH_FILE" --log "$LOG_FILE")
+[ -n "$SESSION_NOTE" ] && ARGS+=(--session-note "$SESSION_NOTE")
+[ -n "$MGMT_PASSWORD_FILE" ] && ARGS+=(--mgmt-password-file "$MGMT_PASSWORD_FILE")
+
+exec sudo -n "$WRAPPER" "${ARGS[@]}"
