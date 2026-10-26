@@ -132,6 +132,7 @@ struct StatusBlock: View {
                 RetryCountdown(deadline: vpn.retryDeadline)
             } else {
                 Text(statusDetail)
+                    .help(statusDetail)      // 中段截断时可悬停读全
             }
         }
         .font(.system(size: Design.Font.caption))
@@ -408,6 +409,7 @@ struct ProfilesCard: View {
     @ViewBuilder
     private func profileItem(_ profile: VPNProfile) -> some View {
         let isActive = vpn.activeProfile?.id == profile.id
+        let subtitle = profileSubtitle(profile)
         if pendingDeleteId == profile.id {
             confirmRow(L10n.tr("connection.confirm.delete", profile.fileName)) {
                 pendingDeleteId = nil
@@ -429,11 +431,12 @@ struct ProfilesCard: View {
                                 .foregroundStyle(Design.ink)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Text(profile.username)
+                            Text(subtitle)
                                 .font(.system(size: Design.Font.hint))
                                 .foregroundStyle(Design.ink3)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                                .help(subtitle)
                         }
                         Spacer(minLength: 0)
                     }
@@ -458,6 +461,20 @@ struct ProfilesCard: View {
                     .fill(isActive ? Design.okSoft.opacity(0.5) : Design.paper3)
             )
         }
+    }
+
+    /// 第二行：`用户名 · 服务器地址`。多配置场景下，光看文件名分不清连的是哪台服务器
+    /// （`serverAddress` 一直存在档案里，此前从未展示）。
+    private func profileSubtitle(_ profile: VPNProfile) -> String {
+        var parts = profile.serverAddress.split(separator: " ").map(String.init)
+        if parts.count >= 2, Int(parts[1]) != nil {
+            parts = [parts[0] + ":" + parts[1]] + Array(parts.dropFirst(2))
+        }
+        let endpoint = parts.joined(separator: " ")
+        let line = [profile.username, endpoint]
+            .filter { !$0.isEmpty && $0 != "—" }
+            .joined(separator: " · ")
+        return line.isEmpty ? "—" : line
     }
 
     private func confirmRow(_ question: String, onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) -> some View {

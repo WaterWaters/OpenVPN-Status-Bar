@@ -9,13 +9,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 但 `swift run`（没有 .app 包与 Info.plist）启动时没有这个键，会多出一个 Dock 图标
         NSApp.setActivationPolicy(.accessory)
         installSignalHandler()
-        // 通知授权（用户可在设置关闭）
-        if UserDefaults.standard.object(forKey: "notifyEnabled") == nil {
-            UserDefaults.standard.set(true, forKey: "notifyEnabled")
+        // 通知默认关闭：新装用户在"还没导入配置"时不该先被系统权限弹窗拦住。
+        // 老用户已有该键（true），行为不变；真正的开启动作在设置页开关上（那时才申请权限）。
+        if UserDefaults.standard.bool(forKey: "notifyEnabled") {
+            // 挪到下一拍：授权要走系统通知 daemon，不该挡在启动路径上 ——
+            // 状态栏图标必须最先出现（非 .app 启动时这里曾直接抛异常导致进程 abort）
+            DispatchQueue.main.async { NotificationService.requestAuthorizationIfNeeded() }
         }
-        // 挪到下一拍：授权要走系统通知 daemon，不该挡在启动路径上 ——
-        // 状态栏图标必须最先出现（非 .app 启动时这里曾直接抛异常导致进程 abort）
-        DispatchQueue.main.async { NotificationService.requestAuthorizationIfNeeded() }
         // 系统睡眠/唤醒：唤醒后交给 NetworkMonitor 收敛（它还会覆盖换 Wi-Fi / 插拔网线的情况）。
         // 睡眠时不做动作 —— 隧道由 openvpn 自己的 --ping-restart 处理。
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
