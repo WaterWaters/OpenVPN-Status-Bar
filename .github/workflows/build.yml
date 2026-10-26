@@ -52,3 +52,85 @@ jobs:
           name: VPNStatusBar-bin
           path: .build/release/VPNStatusBar
           if-no-files-found: error
+
+  # 打包脚本是最容易「只在打包后才暴露问题」的一环：入口文件缺失会让 app 启动即退出、
+  # Info.plist 版本写错会让报障时认不出装的是哪版。这里用假版本号跑一遍真实打包并断言产物。
+  # 注：UI 文案已改为代码内中文表（单语言），不再产出 .lproj/资源 bundle，因此不再断言 bundle。
+  package:
+    name: 打包校验 (build.sh)
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: Swift 版本
+        run: swift --version
+
+      # DMG 的窗口布局需要 Finder 自动化权限，CI 上会失败；build.sh 里该步骤设计为非致命
+      - name: 打包（VERSION 注入）
+        run: VERSION=9.9.9 ./build.sh
+
+      - name: 校验 .app 结构
+        run: |
+          APP="VPNStatusBar.app"
+          test -x "$APP/Contents/MacOS/VPNStatusBar" || { echo "❌ 可执行文件缺失"; exit 1; }
+          test -f "$APP/Contents/Resources/vpn-runner.sh" || { echo "❌ vpn-runner.sh 未打进 app"; exit 1; }
+          test -x "$APP/Contents/Resources/vpn-run.sh" || { echo "❌ vpn-run.sh（root 属主包装脚本）未打进 app"; exit 1; }
+          test -f "$APP/Contents/Resources/AppIcon.icns" || echo "⚠️ 图标缺失（不致命）"
+          echo "✅ 结构校验通过"
+
+      - name: 校验版本号单一来源
+        run: |
+          V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" VPNStatusBar.app/Contents/Info.plist)
+          test "$V" = "9.9.9" || { echo "❌ Info.plist 版本应为 9.9.9，实际为 $V"; exit 1; }
+          test -f "dist/VPNStatusBar-9.9.9.dmg" || echo "⚠️ DMG 未生成（CI 无 Finder 权限，属预期）"
+          echo "✅ 版本注入正确"
+
+      - name: 校验启动包装脚本的白名单（危险指令必须被拒）
+        run: |
+          W="VPNStatusBar.app/Contents/Resources/vpn-run.sh"
+          bash -n "$W"
+          printf 'client\ndev tun\nproto udp\nremote 1.2.3.4 1194\n' > /tmp/ok.ovpn
+          "$W" validate /tmp/ok.ovpn >/dev/null || { echo "❌ 正常配置被拒"; exit 1; }
+          for d in up down route-up plugin script-security tls-verify daemon writepid user log-append management; do
+            printf 'client\n%s /tmp/x.sh\n' "$d" > /tmp/bad.ovpn
+            if "$W" validate /tmp/bad.ovpn >/dev/null 2>&1; then
+              echo "❌ 危险指令未被拒: $d"; exit 1
+            fi
+          done
+          echo "✅ 白名单校验通过（公司风格配置放行、危险指令全拒）"
+
+      - name: 校验签名
+        run: codesign --verify --deep --strict --verbose=2 VPNStatusBar.app
+
+      - name: 内置引擎（vendor/openvpn 为 gitignored，CI 默认缺失）
+        run: |
+          if [ -f vendor/openvpn ]; then
+            file vendor/openvpn
+            lipo -archs VPNStatusBar.app/Contents/Resources/openvpn
+          else
+            echo "⚠️ 仓库内无 vendor/openvpn；本 job 不校验引擎，引擎回归见手动触发的 engine 作业"
+          fi
+
+  # 手动触发：静态编译内置 openvpn 引擎（联网下载 + 1-2 分钟），确认引擎仍可构建、可运行
+  engine:
+    name: 内置引擎回归（手动触发）
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 构建静态引擎
+        run: ./build-openvpn.sh
+
+      - name: 校验引擎
+        run: |
+          test -x vendor/openvpn || { echo "❌ 引擎未生成"; exit 1; }
+          file vendor/openvpn
+          ./vendor/openvpn --version

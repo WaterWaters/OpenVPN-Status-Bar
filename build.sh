@@ -3,8 +3,9 @@
 set -euo pipefail
 
 APP_NAME="VPNStatusBar"
-# 版本号：三处保持一致（Info.plist / DMG 文件名）；发版时改这里并打同名 tag
-VERSION="${VERSION:-0.0.1}"
+# 版本号唯一来源：Info.plist 与 DMG 文件名都取自这里；发版时改这里，并打同名 tag（vX.Y.Z）。
+# CI 发版（.github/workflows/release.yml）用 tag 值覆盖它，并校验 CHANGELOG 有对应段落。
+VERSION="${VERSION:-3.1.0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
@@ -19,6 +20,26 @@ if [ "${ARCHS:-native}" = "universal" ]; then
     ARCH_FLAGS="--arch arm64 --arch x86_64"
 else
     echo "    （native：$(uname -m)）"
+fi
+
+# SDK 兼容：macOS 27 起 @State/@Environment 等改由宏实现，而宏的实现插件 SwiftUIMacros 只随
+# 完整 Xcode 提供，只装 CommandLineTools 时会编译失败（报错是一堆 "self is immutable"）。
+# 此时自动回退到仍用 propertyWrapper 实现的较旧 SDK —— 本项目不依赖新宏，编译/运行行为不变。
+if [ -z "${SDKROOT:-}" ] && [ ! -e "$(xcode-select -p)/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ]; then
+    for sdk in $(ls -dr /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null); do
+        [ -d "$sdk" ] || continue
+        if ! grep -q "macro State" \
+            "$sdk"/System/Library/Frameworks/SwiftUICore.framework/Versions/A/Modules/SwiftUICore.swiftmodule/*.swiftinterface \
+            2>/dev/null; then
+            export SDKROOT="$sdk"
+            echo "    ⚠️ 工具链缺 SwiftUIMacros 插件（该插件随完整 Xcode 提供）；回退 SDKROOT=$(basename "$sdk")"
+            break
+        fi
+    done
+    if [ -z "${SDKROOT:-}" ]; then
+        echo "    ❌ 未找到可用的旧 SDK。请安装完整 Xcode，或手动指定 SDKROOT=/path/to/MacOSX*.sdk"
+        exit 1
+    fi
 fi
 
 swift build -c release \
@@ -44,34 +65,56 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp -f "$BIN" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 # 参数化 vpn-runner.sh（app 内置副本，自包含；运行时通过资源目录调用）
 cp -f "$SCRIPT_DIR/Support/vpn-runner.sh" "$APP_BUNDLE/Contents/Resources/vpn-runner.sh"
+# root 属主启动包装脚本：授权时由 app 安装到 /usr/local/vpnstatusbar/（sudoers 只放行它）
+cp -f "$SCRIPT_DIR/Support/vpn-run.sh" "$APP_BUNDLE/Contents/Resources/vpn-run.sh"
+chmod +x "$APP_BUNDLE/Contents/Resources/vpn-run.sh"
 
 # 内置自包含 openvpn（build-openvpn.sh 静态编译产物；v3：不再依赖用户 brew 安装）
 if [ -f "$SCRIPT_DIR/vendor/openvpn" ]; then
     cp -f "$SCRIPT_DIR/vendor/openvpn" "$APP_BUNDLE/Contents/Resources/openvpn"
     chmod +x "$APP_BUNDLE/Contents/Resources/openvpn"
-    echo "    ✅ 已内置 openvpn ($(lipo -archs "$APP_BUNDLE/Contents/Resources/openvpn" 2>/dev/null | tr '\n' ' '))"
+    ENGINE_ARCHS="$(lipo -archs "$APP_BUNDLE/Contents/Resources/openvpn" 2>/dev/null | tr '\n' ' ')"
+    echo "    ✅ 已内置 openvpn ($ENGINE_ARCHS)"
+    if [ "${ARCHS:-native}" = "universal" ] && ! echo "$ENGINE_ARCHS" | grep -q x86_64; then
+        echo "    ⚠️ 内置引擎只有 $ENGINE_ARCHS，Intel 机器上无法运行；universal 包请先在 Intel 上构建引擎或用 lipo 合并"
+    fi
 else
     echo "    ⚠️ 未找到 vendor/openvpn，跳过内置引擎（连接将依赖本机 openvpn）"
 fi
 
-# app 图标：icon.png → AppIcon.icns（精简：16/32/128/256/512 + @2x 去重后 7 档，体积 -35%）
+# app 图标：icon.png → AppIcon.icns
+# 档位只保留 16/32/128 与其 @2x（64/256）：源图 icon.png 只有 200px，再往上的 512/1024
+# 只是 sips 插值放大出来的 —— 既不清晰又占体积（实测这三档就吃掉 465 KB / 519 KB）。
 ICON_PNG="$SCRIPT_DIR/icon.png"
 if [ -f "$ICON_PNG" ]; then
     ICONSET_DIR="$(mktemp -d)/AppIcon.iconset"
     mkdir -p "$ICONSET_DIR"
-    for s in 16 32 128 256 512; do
+    for s in 16 32 128; do
         sips -z "$s" "$s" "$ICON_PNG" --out "$ICONSET_DIR/icon_${s}x${s}.png" >/dev/null 2>&1
     done
-    for s in 64 512 1024; do
+    for s in 64 256; do
         h=$((s/2))
         sips -z "$s" "$s" "$ICON_PNG" --out "$ICONSET_DIR/icon_${h}x${h}@2x.png" >/dev/null 2>&1
     done
     iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
     rm -rf "$(dirname "$ICONSET_DIR")"
-    echo "    ✅ 已生成 AppIcon.icns（精简档位）"
+    echo "    ✅ 已生成 AppIcon.icns（$(du -h "$APP_BUNDLE/Contents/Resources/AppIcon.icns" | cut -f1)）"
+    SRC_PX="$(sips -g pixelWidth "$ICON_PNG" 2>/dev/null | awk '/pixelWidth/{print $2}')"
+    if [ -n "$SRC_PX" ] && [ "$SRC_PX" -lt 512 ] 2>/dev/null; then
+        echo "    ⚠️ 源图 icon.png 只有 ${SRC_PX}px：大尺寸档位只能是插值图（换 ≥512px 源图会更清晰）"
+    fi
 fi
 
-cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
+# SwiftPM 资源 bundle：当前已无（UI 文案是代码内中文表，不产出 .lproj）。
+# 保留这段拷贝逻辑，以便将来再加资源文件时能自动带上，避免"打包漏资源 → 启动即退出"。
+for b in "$BUILD_DIR/release/"*.bundle; do
+    if [ -d "$b" ]; then
+        cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
+        echo "    ✅ 已内置资源 bundle $(basename "$b")"
+    fi
+done
+
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -83,9 +126,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key>
     <string>io.vpnstatusbar</string>
     <key>CFBundleVersion</key>
-    <string>0.0.1</string>
+    <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.0.1</string>
+    <string>${VERSION}</string>
     <key>CFBundleExecutable</key>
     <string>VPNStatusBar</string>
     <key>CFBundleIconFile</key>
@@ -140,6 +183,7 @@ cat > "$DIST_DIR/使用说明.md" <<'MD'
 面板底部 →「设置…」→「授权 VPN…」→ 输入一次系统开机密码 → 变为「已授权」。
 此时 openvpn 已安装到系统并完成免密授权，之后连接**不再需要密码**。
 
+
 > 若授权弹窗被误关，或在设置里状态显示「未授权 / 异常」，点「授权 VPN… / 修复并重新授权…」再次发起即可。
 
 ### 3. 连接
@@ -152,8 +196,10 @@ cat > "$DIST_DIR/使用说明.md" <<'MD'
 |---|---|
 | 连接 | 菜单栏图标 → 「连接 VPN」 |
 | 断开 | 菜单栏图标 → 「断开 VPN」 |
-| 授权引擎 / 修改配置 / 清除配置 | 面板底部 → 「设置…」 |
-| 自动重连开关 | 面板内「断线自动重连」 |
+| 取消卡住的连接 | 连接超过 8 秒后主按钮变「取消连接」 |
+| 授权引擎 / 修改配置 / 清除配置 | 面板「设置」标签页 |
+| 自动重连开关 | 「概览」标签页的「断线自动重连」 |
+| 发日志给管理员 | 「诊断」标签页 → 「复制日志」/「打开日志文件」 |
 
 图标颜色：🟢 已连接 / 🟠 连接中·重连中 / ⚪ 已断开·未配置
 
@@ -175,7 +221,8 @@ cat > "$DIST_DIR/使用说明.md" <<'MD'
 | 点连接提示"引擎未授权" | 面板底部「设置…」→「授权 VPN…」→ 输一次开机密码 |
 | 设置显示"引擎异常" | 「设置…」→「修复并重新授权…」（重装引擎并补授权） |
 | 连接报错 sudo 需要密码 | 到「设置…」重新「授权 VPN…」，确保授权弹窗完成 |
-| 点连接没反应 | 看面板「日志」，导出后反馈 |
+| 反复重连后停下，事件行提示"用户名或密码错误" | app 检测到 AUTH_FAILED 已停止重连：到「设置…」→「修改当前配置…」更新密码（不必重选 .ovpn） |
+| 点连接没反应 | 「诊断」标签页 → 「复制日志」后反馈（日志保留历史会话） |
 MD
 
 echo "✅ 分发包已生成: $DIST_DIR"

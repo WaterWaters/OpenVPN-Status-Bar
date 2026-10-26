@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-openvpn.sh — 静态编译自包含 openvpn (arm64, macOS)
+# build-openvpn.sh — 静态编译自包含 openvpn (当前主机架构, macOS)
 #
 # 目标：产出可打进 app 的自包含 openvpn 二进制（不依赖 Homebrew dylib，
 #       同事零安装即可运行）。方案：openvpn + OpenSSL + LZO + LZ4 全部静态编译。
@@ -37,8 +37,18 @@ LZ4_PREFIX="$PREFIX/lz4"
 
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
-CFLAGS_EXT="-Os -ffunction-sections -fdata-sections -flto -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
-LDFLAGS_EXT="-Wl,-dead_strip -Wl,-x"
+
+# 按主机架构编译（Intel 机器源码构建也能得到可用的 x86_64 引擎）。
+# 注意：产物是**单架构**的，与 build.sh 的 ARCHS=universal 不匹配，build.sh 会给出警告。
+HOST_ARCH="$(uname -m)"
+case "$HOST_ARCH" in
+    arm64)  OPENSSL_TARGET="darwin64-arm64-cc" ;;
+    x86_64) OPENSSL_TARGET="darwin64-x86_64-cc" ;;
+    *) echo "❌ 不支持的架构: $HOST_ARCH（仅支持 arm64 / x86_64）" >&2; exit 1 ;;
+esac
+
+CFLAGS_EXT="-Os -arch $HOST_ARCH -ffunction-sections -fdata-sections -flto -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+LDFLAGS_EXT="-arch $HOST_ARCH -Wl,-dead_strip -Wl,-x"
 
 mkdir -p "$SRC" "$CACHE" "$OPENSSL_PREFIX" "$LZO_PREFIX" "$LZ4_PREFIX" "$(dirname "$OUT_BIN")"
 
@@ -66,9 +76,9 @@ build_openssl(){
   tar -xzf "$CACHE/openssl-${OPENSSL_VER}.tar.gz" -C "$SRC/openssl" --strip-components=1
   (
     cd "$SRC/openssl"
-    ./Configure darwin64-arm64-cc no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX" \
+    ./Configure "$OPENSSL_TARGET" no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX" \
         -DOPENSSL_NO_ASM >/dev/null 2>&1 || \
-    ./Configure darwin64-arm64-cc no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX"
+    ./Configure "$OPENSSL_TARGET" no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX"
     make -j"$JOBS" CFLAGS="$CFLAGS_EXT" LDFLAGS="$LDFLAGS_EXT" >/dev/null
     make install_sw >/dev/null
   )
@@ -141,7 +151,11 @@ build_openvpn(){
   )
   # 精简 + 固定架构与部署目标（dead_strip + 去调试符号）
   strip -S -x "$OUT_BIN" 2>/dev/null || strip -x "$OUT_BIN"
-  echo "    ✅ 产物: $OUT_BIN"
+  # 再丢掉全局/导出符号表：静态链接把整个 OpenSSL 的符号都带进来了，__LINKEDIT 里 655 KB 全是符号表
+  # （实测 4,882,824 → 4,500,944 B，`--version` 正常）。代价：引擎崩溃报告只剩地址；
+  # 需要符号化时用构建中间产物 .build/openvpn-embed/src/openvpn/src/openvpn/openvpn（strip 前的原件）。
+  strip -u -r "$OUT_BIN" 2>/dev/null || true
+  echo "    ✅ 产物: $OUT_BIN ($(du -h "$OUT_BIN" | cut -f1))"
 }
 
 build_openssl
