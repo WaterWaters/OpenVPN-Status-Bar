@@ -1,7 +1,7 @@
 import Foundation
 
 /// VPN 引擎授权状态（纯逻辑，可单元测试）
-public enum EngineAuth: Equatable {
+public enum EngineAuth: Equatable, Sendable {
     case checking
     case authorized
     case unauthorized

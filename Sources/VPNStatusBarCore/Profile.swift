@@ -1,7 +1,7 @@
 import Foundation
 
 /// 通用 VPN 配置档案（可单元测试的纯值类型）
-public struct VPNProfile: Codable, Equatable, Identifiable {
+public struct VPNProfile: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var name: String        // 显示名，默认取文件名
     public var fileName: String    // 原始 .ovpn 文件名

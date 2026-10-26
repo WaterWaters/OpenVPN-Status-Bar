@@ -3,12 +3,12 @@ import XCTest
 
 final class VPNStatusTests: XCTestCase {
     func testTitle() {
-        // defaultLocalization = en
-        XCTAssertEqual(VPNStatus.unconfigured.title, "Not Configured")
-        XCTAssertEqual(VPNStatus.disconnected.title, "Disconnected")
-        XCTAssertEqual(VPNStatus.connecting.title, "Connecting...")
-        XCTAssertEqual(VPNStatus.connected.title, "Connected")
-        XCTAssertEqual(VPNStatus.reconnecting(attempt: 3).title, "Reconnecting (3)")
+        // 单语言：简体中文（文案表在 L10nCore 内）
+        XCTAssertEqual(VPNStatus.unconfigured.title, "未配置")
+        XCTAssertEqual(VPNStatus.disconnected.title, "已断开")
+        XCTAssertEqual(VPNStatus.connecting.title, "连接中…")
+        XCTAssertEqual(VPNStatus.connected.title, "已连接")
+        XCTAssertEqual(VPNStatus.reconnecting(attempt: 3).title, "重连中（第 3 次）")
     }
 
     func testSymbolName() {
@@ -31,10 +31,10 @@ final class VPNStatusTests: XCTestCase {
 
 final class EngineAuthTests: XCTestCase {
     func testSummary() {
-        XCTAssertEqual(EngineAuth.checking.summary, "Checking VPN engine...")
-        XCTAssertEqual(EngineAuth.authorized.summary, "VPN engine authorized")
-        XCTAssertEqual(EngineAuth.unauthorized.summary, "VPN engine not authorized")
-        XCTAssertEqual(EngineAuth.broken.summary, "VPN engine error")
-        XCTAssertEqual(EngineAuth.authorizing.summary, "Authorizing VPN engine...")
+        XCTAssertEqual(EngineAuth.checking.summary, "VPN 引擎检测中…")
+        XCTAssertEqual(EngineAuth.authorized.summary, "VPN 引擎已授权")
+        XCTAssertEqual(EngineAuth.unauthorized.summary, "VPN 引擎未授权（需要授权 VPN）")
+        XCTAssertEqual(EngineAuth.broken.summary, "VPN 引擎异常（需要修复）")
+        XCTAssertEqual(EngineAuth.authorizing.summary, "VPN 引擎授权中…")
     }
 }

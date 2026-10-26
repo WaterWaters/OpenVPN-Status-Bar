@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// VPN 连接状态（纯逻辑，可单元测试）
-public enum VPNStatus: Equatable {
+public enum VPNStatus: Equatable, Sendable {
     case unconfigured
     case disconnected
     case connecting
@@ -26,9 +26,6 @@ public enum VPNStatus: Equatable {
         case .unconfigured: return "shield.slash"
         }
     }
-
-    /// 加粗变体：菜单栏建议用 filled，线条更粗、与其他系统图标更搭
-    public var menuBarSymbol: String { symbolName }
 
     public var color: Color {
         switch self {
